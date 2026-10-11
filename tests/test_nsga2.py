@@ -23,8 +23,8 @@ class NSGA2Tests(unittest.TestCase):
         return e.Individual((index,), values)
 
     def fake_evaluator(self, circuit, recipe, *, budget, **kwargs):
-        budget.check(len(recipe))
-        budget.tool_calls += len(recipe)
+        budget.check()
+        budget.tool_calls += 1
         return {"metrics": {"lut_count": sum(recipe), "lut_levels": 100 - sum(recipe)}}
 
     def config(self, **overrides):
@@ -79,7 +79,7 @@ class NSGA2Tests(unittest.TestCase):
         self.assertEqual([p["recipe"] for p in first["pareto"]],
                          [[1, 0, 2], [3, 2, 4], [3, 0, 8], [7, 0, 5],
                           [3, 2, 13], [7, 7, 4], [7, 7, 5]])
-        self.assertEqual((first["tool_calls"], first["cache_hits"]), (21, 6))
+        self.assertEqual((first["tool_calls"], first["cache_hits"]), (7, 6))
         self.assertEqual(first["successful_evaluations"] + first["cache_hits"], 4 + 3 * 3)
         pairs = [(p["lut_count"], p["lut_levels"]) for p in first["pareto"]]
         self.assertFalse(any(e.dominates(a, b) for a in pairs for b in pairs))
@@ -91,32 +91,32 @@ class NSGA2Tests(unittest.TestCase):
             seen.append(kwargs["budget"])
             return self.fake_evaluator(*args, **kwargs)
         with patch.object(abc, "evaluate_recipe", side_effect=evaluate) as tool:
-            result = e.run("unused.aig", self.config(max_tool_calls=6))
+            result = e.run("unused.aig", self.config(max_tool_calls=2))
         self.assertEqual(result["status"], "budget_exhausted")
-        self.assertEqual(result["tool_calls"], 6)
+        self.assertEqual(result["tool_calls"], 2)
         self.assertEqual(tool.call_count, 2)
         self.assertTrue(all(b is seen[0] for b in seen))
         self.assertIsNotNone(result["best"])
         with patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator) as tool:
-            result = e.run("unused.aig", self.config(max_tool_calls=3))
+            result = e.run("unused.aig", self.config(max_tool_calls=1))
         self.assertEqual(tool.call_count, 1)
         self.assertIsNotNone(result["best"])
-        self.assertEqual(result["tool_calls"], 3)
+        self.assertEqual(result["tool_calls"], 1)
         self.assertEqual(result["status"], "budget_exhausted")
 
     def test_repeated_recipe_real_cache_hit(self):
         events = []
         with patch.object(e.random.Random, "randrange", return_value=0), \
              patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator) as tool:
-            result = e.run("unused.aig", self.config(crossover_rate=0, mutation_rate=0, max_tool_calls=3),
+            result = e.run("unused.aig", self.config(crossover_rate=0, mutation_rate=0, max_tool_calls=1),
                            progress=events.append)
         self.assertEqual(tool.call_count, 1)
-        self.assertEqual(result["tool_calls"], 3)
+        self.assertEqual(result["tool_calls"], 1)
         self.assertEqual(result["best"]["recipe"], [0, 0, 0])
         self.assertEqual(result["cache_hits"], 12)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(events[-1]["cache_hits"], 12)
-        self.assertEqual(events[-1]["tool_calls"], 3)
+        self.assertEqual(events[-1]["tool_calls"], 1)
 
     def test_failures_abort_and_preserve_diagnostics(self):
         for uncertain in (False, True):
@@ -138,7 +138,7 @@ class NSGA2Tests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertIsNone(result["best"])
             self.assertEqual(result["failure"]["abc_output"], "raw failure")
-            self.assertEqual(result["tool_calls"], None if uncertain else 4)
+            self.assertEqual(result["tool_calls"], None if uncertain else 2)
             self.assertEqual(events[-1]["status"], "failed")
             self.assertEqual(events[-1]["tool_calls"], result["tool_calls"])
             with tempfile.TemporaryDirectory() as directory:
@@ -206,7 +206,7 @@ class NSGA2Tests(unittest.TestCase):
             self.assertEqual(events[0]["config"], result["config"])
             self.assertEqual([p["generation"] for p in events if p["event"] == "generation"], [0, 1, 2, 3])
             self.assertEqual(events[1]["event"], "improvement")
-            self.assertEqual(events[1]["tool_calls"], 3)
+            self.assertEqual(events[1]["tool_calls"], 1)
             for event in events:
                 self.assertEqual(event["budget_utilization_percent"], event["tool_calls"])
                 self.assertGreaterEqual(event["elapsed_seconds"], 0)
@@ -216,7 +216,7 @@ class NSGA2Tests(unittest.TestCase):
             for key in ("tool_calls", "cache_hits", "status", "best"):
                 self.assertEqual(final[key], result[key])
             self.assertEqual(final["pareto_size"], len(result["pareto"]))
-            self.assertEqual(result["tool_calls"], 3 * result["successful_evaluations"])
+            self.assertEqual(result["tool_calls"], result["successful_evaluations"])
 
     def test_real_cli_overrides_determinism_and_progress(self):
         runner = Path(e.__file__).resolve().parents[2] / "run.py"
@@ -227,7 +227,7 @@ class NSGA2Tests(unittest.TestCase):
                 process = subprocess.run(
                     [sys.executable, str(runner), "--algorithm", "nsga2", "--circuit", str(circuit),
                      "--optimization-mode", "pareto",
-                     "--seed", "7", "--recipe-length", "1", "--population-size", "2",
+                     "--seed", "7", "--recipe-length", "20", "--population-size", "2",
                      "--offspring-count", "2", "--generations", "1", "--max-tool-calls", "4",
                      "--lut-k", "6", "--crossover-rate", "0.8", "--mutation-rate", "1",
                      "--timeout", "none"], cwd=directory, capture_output=True, text=True)
@@ -238,7 +238,7 @@ class NSGA2Tests(unittest.TestCase):
                 self.assertEqual(result["status"], "completed")
                 self.assertEqual(result["tool_calls"], 4)
                 self.assertEqual(result["config"], asdict(e.Config(
-                    seed=7, recipe_length=1, population_size=2, offspring_count=2, generations=1,
+                    seed=7, population_size=2, offspring_count=2, generations=1,
                     max_tool_calls=4, crossover_rate=0.8, mutation_rate=1, timeout=None,
                     optimization_mode="pareto")))
                 events = [json.loads(line) for line in (result_path.parent / "progress.jsonl").read_text().splitlines()]

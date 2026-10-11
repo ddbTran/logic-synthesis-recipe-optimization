@@ -114,10 +114,10 @@ class ExperimentTests(unittest.TestCase):
             self.assertTrue((directory / "result.json").exists())
 
     def test_cli_reruns_clear_success_before_execution_and_keep_effective_config(self):
-        config = e.Config(recipe_length=1, population_size=2, offspring_count=2, generations=0, max_tool_calls=3)
+        config = e.Config(population_size=2, offspring_count=2, generations=0, max_tool_calls=3)
         experiment = self.describe(config)
         argv = ["run.py", "--algorithm", "nsga2", "--circuit", str(self.circuit),
-                "--recipe-length", "1", "--population-size", "2", "--offspring-count", "2", "--generations", "0", "--max-tool-calls", "3"]
+                "--population-size", "2", "--offspring-count", "2", "--generations", "0", "--max-tool-calls", "3"]
         prepare = x.prepare_run
         with tempfile.TemporaryDirectory() as root, patch.object(sys, "argv", argv), \
              patch.object(x, "prepare_run", side_effect=lambda description: prepare(description, root)), \
@@ -147,7 +147,7 @@ class ExperimentTests(unittest.TestCase):
                 self.assertEqual(runner.main(), 1)
             result = json.loads((directory / "result.json").read_text())
             self.assertEqual(result["status"], "failed")
-            self.assertEqual(result["tool_calls"], 0)
+            self.assertEqual(result["tool_calls"], 1)
             self.assertFalse((directory / "best.csv").exists())
             self.assertFalse((directory / "pareto.json").exists())
             self.assertIsNone(json.loads((directory / "best.json").read_text()))
@@ -159,17 +159,17 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(metadata["abc_executable"]["sha256"], result["provenance"]["abc_sha256"])
             events = [json.loads(line) for line in (directory / "progress.jsonl").read_text().splitlines()]
             self.assertEqual(events[-1]["status"], "failed")
-            self.assertEqual(events[-1]["tool_calls"], 0)
+            self.assertEqual(events[-1]["tool_calls"], 1)
             self.assertTrue(all(event["results_directory"] == str(directory) for event in events))
             self.assertTrue(all(event["effective_config"] == asdict(config) for event in events))
 
     def test_library_write_results_reuses_path_and_removes_stale_success(self):
         def evaluate(circuit, recipe, *, budget, **kwargs):
-            budget.check(len(recipe))
-            budget.tool_calls += len(recipe)
+            budget.check()
+            budget.tool_calls += 1
             return {"metrics": {"lut_count": 2, "lut_levels": 1}}
         with patch.object(e.abc, "evaluate_recipe", side_effect=evaluate):
-            result = e.run(self.circuit, e.Config(recipe_length=1, optimization_mode="pareto", population_size=2,
+            result = e.run(self.circuit, e.Config(optimization_mode="pareto", population_size=2,
                                                 generations=0, max_tool_calls=2))
         with tempfile.TemporaryDirectory() as root:
             first = e.write_results(result, root)

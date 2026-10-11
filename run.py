@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
     parser.add_argument("--seed", type=int, help="Random seed (NSGA-II default: 0)")
-    parser.add_argument("--max-tool-calls", type=int, help="ABC pool-action budget override; BOiLS requires an explicit budget")
+    parser.add_argument("--max-tool-calls", type=int, help="ABC sequence evaluation invocation budget override; BOiLS requires an explicit budget")
     parser.add_argument("--config", help="NSGA-II JSON-subset YAML configuration")
     for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval"):
         parser.add_argument("--" + name, type=int)

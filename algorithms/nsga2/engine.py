@@ -265,7 +265,7 @@ def run(circuit, config, *, progress=None):
         if recipe in cache:
             cache_hits += 1
             return make_member(recipe, cache[recipe])
-        budget.check(len(recipe))
+        budget.check()
         result = abc.evaluate_recipe(circuit, recipe, budget=budget, metric="lut",
                                      lut_k=config.lut_k, timeout=config.timeout,
                                      abc_binary=config.abc_binary)
@@ -296,7 +296,7 @@ def run(circuit, config, *, progress=None):
     try:
         if weighted:
             # The original circuit is a normalization reference, not a candidate.
-            budget.check(0)
+            budget.check()
             baseline_result = abc.evaluate_recipe(
                 circuit, [], budget=budget, metric="lut", lut_k=config.lut_k,
                 timeout=config.timeout, abc_binary=config.abc_binary)
@@ -305,6 +305,7 @@ def run(circuit, config, *, progress=None):
             if any(baseline[name] <= 0 for name in ("lut_count", "lut_levels")):
                 raise ValueError("Baseline LUT count and LUT levels must be positive")
             emit("baseline", generation)
+            emit("checkpoint", generation)
         population = [evaluate(tuple(rng.randrange(len(TRANSFORMS))
                                      for _ in range(config.recipe_length)))
                       for _ in range(config.population_size)]

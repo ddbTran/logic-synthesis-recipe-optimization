@@ -44,22 +44,19 @@ budget remains undecided and must be explicitly configured. The utility's
 `ActionBudget(limit)` requires an explicit limit; future adapters select the
 appropriate default without changing the core search algorithm.
 
-One call is one executed pool action. Each bundled GIA entry costs one call.
-A recipe of length L costs L calls each time ABC executes it. Replaying prefixes
-of lengths 1 through L costs L(L+1)/2, not L. A cache hit that executes no actions
-costs zero. Process invocations and full-recipe evaluations are separate counts.
-Circuit loading, `strash`, measurement mapping, and statistics are not pool calls.
-Feature extraction or training that executes pool actions must share the run's
-budget too.
+One tool call is one launched ABC sequence (full recipe evaluation), regardless
+of recipe length or how many commands an action contains. An empty-recipe
+baseline also costs one call. A cache hit launches no ABC and costs zero.
+Replaying L prefixes in separate evaluations costs L calls. Loading, `strash`,
+transformations, mapping and statistics all share the same sequence invocation.
+Action completion counts are diagnostics, not budget charges.
 
-The serial evaluator checks the whole recipe against the remaining budget before
-launch; it rejects an oversized recipe instead of truncating it. Successful calls
-report per-evaluation and cumulative action counts. An error/timeout preserves raw
-output and confirmed completions as a lower bound. If the exact count is uncertain,
-`budget.tool_calls` becomes `None` and subsequent evaluations are refused: abort
-that run and do not publish an exact action count or successful CSV row. Never
-reset the budget to continue the same failed run. Parallel accounting is not
-implemented.
+The serial evaluator checks one call before launch and never truncates recipes.
+A launched sequence costs one call even if it fails or times out. Invalid inputs
+and definite launch failures cost zero. An unexpected launch exception can leave
+invocation accounting uncertain (`budget.tool_calls = None`); abort the run and
+refuse further evaluations. Never reset the budget to continue a failed run.
+Parallel accounting is not implemented.
 
 ## ABC and QoR
 
@@ -70,7 +67,7 @@ markers detect interrupted scripts even when ABC returns exit code zero. It
 handles missing executables, command failures, malformed metrics and timeouts,
 and returns raw output with measurements and runtime. No shell is invoked.
 
-For a run using the 4,000-action budget, call the existing API from the project
+For a run using the 4,000-sequence budget, call the existing API from the project
 root and reuse **the same budget object** for every candidate:
 
 ```python
@@ -85,20 +82,20 @@ result = evaluate_recipe(
     abc_binary="yosys-abc", timeout=None,
 )
 print(result["metrics"])          # {"lut_count": int, "lut_levels": int}
-print(result["tool_calls"])       # Actions in this evaluation (3 here).
-print(result["total_tool_calls"]) # Cumulative executed actions in this run.
+print(result["tool_calls"])       # Sequence invocations in this evaluation (1 here).
+print(result["total_tool_calls"]) # Cumulative launched sequences in this run.
 ```
 
 `timeout` defaults to 60 seconds; `None` disables the deadline. Change
 `abc_binary` to an executable name or path when needed. The result also includes
 the recipe, raw ABC output, runtime, and separate process/evaluation counts.
-Input loading and `if -K 6` mapping cost zero pool calls; each GIA bundle costs
-one. `BudgetExceeded` rejects an oversized recipe before launching ABC.
-`ABCError` reports execution/parsing failures with raw output and confirmed
-completions; missing input files raise `FileNotFoundError`. Failed evaluations
-return no QoR. If a timeout occurs after all action completion markers, their
-exact count is retained; otherwise the run budget becomes uncertain as described
-above. No candidate caching or fitness/reward calculation is performed.
+Input loading, ordered actions, `if -K 6` mapping and measurement share one
+invocation. `BudgetExceeded` rejects an evaluation before launch when no calls
+remain. `ABCError` reports execution/parsing failures with raw output and
+confirmed action completions; missing inputs raise `FileNotFoundError`.
+Failed evaluations return no QoR but retain the known sequence charge, including
+timeouts and interrupted actions. No candidate caching or fitness/reward
+calculation is performed by this utility.
 
 Run the focused evaluator checks without benchmark conversion or equivalence:
 
@@ -149,7 +146,7 @@ python tests/smoke_abc.py --evaluator-only
 Defaults: seed 0, recipe length 20, population 40, offspring count 40,
 99 offspring generations after initialization, crossover probability 0.9,
 per-gene mutation probability 0.05, LUT K=6, timeout 60 seconds,
-`yosys-abc`, and **4000 executed pool actions**. CLI options override
+`yosys-abc`, and **4000 launched sequences**. CLI options override
 [config.yaml](algorithms/nsga2/config.yaml); `--config PATH` accepts JSON syntax,
 a YAML subset parsed by the standard library (no PyYAML dependency). Unknown
 keys and invalid settings fail before evaluation. `--timeout none` (or JSON
@@ -159,9 +156,9 @@ LUT count/levels with weights 0.5/0.5; `--optimization-mode pareto` selects
 two-objective NSGA-II. ASIC/AIG objectives are rejected explicitly.
 
 Ordered full recipes, including repeats, are cached only within a run. Every
-cache miss uses the shared evaluator and the same budget object; each actually
-executed length-L recipe costs L actions. Cache hits launch no ABC and cost zero.
-Stop at the first unaffordable cache miss without truncating the recipe.
+cache miss uses the shared evaluator and the same budget object; each launched
+sequence costs one tool call regardless of recipe length. Cache hits launch no ABC and cost zero.
+Stop at the first cache miss with no remaining calls; never truncate recipes.
 Fixed seed/config/input/ABC bytes give reproducible search and best selection.
 
 Results retain the deterministic layout
@@ -197,7 +194,7 @@ Every `checkpoint` includes these fields (also present on other engine events):
 | --- | --- |
 | `event` | `"checkpoint"` |
 | `evaluations` | Integer count of successful, non-cached candidate recipe evaluations |
-| `tool_calls` | Cumulative executed pool actions; integer, or null on uncertain failures |
+| `tool_calls` | Cumulative launched ABC sequences; integer, or null on uncertain launches |
 | `elapsed_seconds` | Cumulative wall-clock runtime in seconds |
 | `best_fitness` | Lowest measured candidate weighted fitness so far, or null |
 | `best_lut_count`, `best_lut_levels` | QoR of that same scalar winner, or null |
@@ -205,30 +202,32 @@ Every `checkpoint` includes these fields (also present on other engine events):
 Weighted fitness is `weight_area * LUTs / baseline_LUTs + weight_delay * levels /
 baseline_levels` (lower is better). The original circuit's empty-recipe baseline
 is a normalization reference, excluded from `evaluations` and counted separately
-as `baseline_evaluations`. It executes zero pool actions, so costs zero
-`tool_calls`, but contributes one `abc_process_invocations` when launched.
+as `baseline_evaluations`. Its empty recipe costs one `tool_calls` and one
+`abc_process_invocations` when launched, including failure or timeout.
 Cache hits, failed evaluations and unevaluated proposals never increment
 `evaluations`. `candidate_attempts` includes cache hits and a budget-rejected
 candidate; `cache_hits` and process invocations are separate counters.
 `result.json` retains `successful_evaluations` as an alias of `evaluations`.
 
-`checkpoint_interval` defaults to **200 actions**, configurable in JSON/YAML or
+`checkpoint_interval` defaults to **200 sequence calls**, configurable in JSON/YAML or
 with `--checkpoint-interval`. `common.progress.CheckpointScheduler` is reusable
 by future engines: supply a snapshot after updating measured best/archive and
 call once at termination with `final=True`. Scheduling is independent of
 generations. The evaluator returns only completed full recipes: no intermediate
-QoR inside a recipe is measured. For example, a recipe taking cumulative calls
-from 190 to 410 emits one snapshot at **410**, listing
-`checkpoint_thresholds: [200, 400]`. Every crossed threshold is represented
-once, without repeating an identical measurement or pretending it was observed
-at 200. Use the actual **`tool_calls` as the convergence X-axis**, never generation
-or threshold labels. No interpolation within recipes is justified.
+QoR inside a recipe is measured. At cumulative call 200 the snapshot records
+`tool_calls: 200` and `checkpoint_thresholds: [200]`. Each launched recipe
+increments calls by one, so NSGA-II normally crosses one threshold at a time.
+The reusable scheduler can group multiple crossed thresholds into one measured
+snapshot if an adapter reports several calls together. Every threshold is
+represented once; use the actual **`tool_calls` as the convergence X-axis**,
+never generations or individual action counts. No interpolation within recipes
+is justified.
 
 A final checkpoint is emitted when counters or measured best/archive differ
 from the last checkpoint, including early termination and cache-only progress.
 Elapsed time, generation and status changes alone do not create duplicate
 checkpoints; the final `summary` always carries termination status and runtime.
-Failed recipes yield no new QoR. Known final action counts can cross thresholds;
+Failed recipes yield no new QoR. Known final sequence counts can cross thresholds;
 uncertain counts remain null and cannot define additional thresholds.
 
 In Pareto mode all three scalar `best_*` fields are null. Checkpoints retain
@@ -237,11 +236,11 @@ representative, not a scalar convergence criterion. Compare archives with an
 explicit multi-objective metric rather than treating this representative as a
 scalar optimum.
 
-Older results used one `tool_calls` per ABC process invocation. Their call axes
-must not be mixed with the standardized action counts. Commands, LUT mapping,
-fitness and search operators are unchanged; action-based budgets can terminate
-long recipes earlier. New configs include `checkpoint_interval` in experiment
-identity, so default runs use distinct deterministic paths from older configs.
+Sequence-call accounting preserves the original evaluator budget semantics.
+Commands, LUT mapping, fitness and search operators are unchanged. The earlier
+action-counting revision used a different budget unit; do not mix its results
+with sequence-based curves. New configs include `checkpoint_interval` in their
+deterministic experiment identity.
 
 Validation: `python -m unittest discover -s tests -v` and
 `python tests/smoke_abc.py --evaluator-only`; the small CLI checks run both modes
@@ -269,7 +268,7 @@ The supplied `../example/drill_logic_synthesis.py` also uses the exact shared po
 and ABC LUT parsing, but explicitly substitutes linear-policy REINFORCE for
 DRiLLS's A2C. It is a useful utility reference, not an equivalent original DRiLLS
 implementation. Neither example source is copied or executed. The NSGA-II adaptation adds the
-shared executed-action budget missing from the example.
+shared sequence-invocation budget missing from the example.
 
 Before integrating another engine, select its faithful source/variant, QoR
 track and objective (including Pareto reporting), LUT K or ASIC library/constraints,
