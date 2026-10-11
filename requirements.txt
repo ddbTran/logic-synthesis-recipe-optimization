@@ -1,0 +1,2 @@
+# Python >= 3.10. The current skeleton uses only the standard library.
+# Add algorithm-specific dependencies only when integrating an engine.
