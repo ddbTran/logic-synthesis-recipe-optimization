@@ -70,6 +70,7 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
     Every replayed recipe action costs one call, including each bundled GIA entry.
     Loading, strash, mapping and statistics do not count as pool actions. No cache.
     Reject a whole recipe that would exceed the run budget; never truncate it.
+    timeout=None disables the subprocess deadline.
     After uncertain execution failure budget.tool_calls is None: abort the run.
     """
     recipe = list(recipe)
@@ -81,8 +82,8 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
         raise ValueError("LUT evaluation requires an explicit integer lut_k >= 2 supported by ABC")
     if metric == "aig" and lut_k is not None:
         raise ValueError("lut_k applies only to LUT evaluation")
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("timeout must be finite and positive")
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("timeout must be None or finite and positive")
     circuit = Path(circuit).resolve(strict=True)
     if not circuit.is_file():
         raise ValueError("Circuit must be a file")
@@ -121,9 +122,12 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
             output = exc.stdout or ""
             if isinstance(output, bytes):
                 output = output.decode(errors="replace")
-            budget.tool_calls = None
-            confirmed = sum(line.strip() == f"{action_prefix}{i}"
-                            for line in output.splitlines() for i in range(len(recipe)))
+            lines = {line.strip() for line in output.splitlines()}
+            confirmed = sum(f"{action_prefix}{i}" in lines for i in range(len(recipe)))
+            if confirmed == len(recipe):
+                budget.tool_calls += confirmed
+            else:
+                budget.tool_calls = None
             raise ABCError(f"ABC timed out after {timeout}s; stop this run", output, confirmed) from exc
         except OSError as exc:
             # Process did not start; no optimization actions were executed.

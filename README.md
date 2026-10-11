@@ -68,6 +68,42 @@ markers detect interrupted scripts even when ABC returns exit code zero. It
 handles missing executables, command failures, malformed metrics and timeouts,
 and returns raw output with measurements and runtime. No shell is invoked.
 
+For a run using the 4,000-action budget, call the existing API from the project
+root and reuse **the same budget object** for every candidate:
+
+```python
+from common.abc import ActionBudget, evaluate_recipe
+from common.actions import MAX_TOOL_CALLS
+
+budget = ActionBudget(MAX_TOOL_CALLS)  # BOiLS must supply its own selected limit.
+result = evaluate_recipe(
+    "benchmarks/epfl/random_control/ctrl.aig",
+    [0, 4, 14],  # Ordered action indices 0-15; repeats and [] are supported.
+    budget=budget, metric="lut", lut_k=6,
+    abc_binary="yosys-abc", timeout=None,
+)
+print(result["metrics"])          # {"lut_count": int, "lut_levels": int}
+print(result["tool_calls"])       # Actions in this evaluation (3 here).
+print(result["total_tool_calls"]) # Cumulative executed actions in this run.
+```
+
+`timeout` defaults to 60 seconds; `None` disables the deadline. Change
+`abc_binary` to an executable name or path when needed. The result also includes
+the recipe, raw ABC output, runtime, and separate process/evaluation counts.
+Input loading and `if -K 6` mapping cost zero pool calls; each GIA bundle costs
+one. `BudgetExceeded` rejects an oversized recipe before launching ABC.
+`ABCError` reports execution/parsing failures with raw output and confirmed
+completions; missing input files raise `FileNotFoundError`. Failed evaluations
+return no QoR. If a timeout occurs after all action completion markers, their
+exact count is retained; otherwise the run budget becomes uncertain as described
+above. No candidate caching or fitness/reward calculation is performed.
+
+Run the focused evaluator checks without benchmark conversion or equivalence:
+
+```bash
+python tests/smoke_abc.py --evaluator-only
+```
+
 Choose the metric explicitly:
 
 - `metric="aig"`: unmapped `and` and `lev`, returned as `aig_nodes`, `aig_levels`.
