@@ -1,4 +1,4 @@
-"""Research runner: NSGA-II and Sequential Forward Greedy integrated."""
+"""Research runner: NSGA-II, Greedy and DRiLLS integrated."""
 
 import argparse
 import sys
@@ -10,15 +10,16 @@ ALGORITHMS = (
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II and Greedy integrated).")
+    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II, Greedy and DRiLLS integrated).")
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
     parser.add_argument("--seed", type=int, help="Experiment seed (default: 0)")
     parser.add_argument("--max-tool-calls", type=int, help="ABC sequence evaluation invocation budget override; BOiLS requires an explicit budget")
     parser.add_argument("--config", help="Algorithm JSON-subset YAML configuration")
-    for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval"):
+    for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval", "episodes"):
         parser.add_argument("--" + name, type=int)
-    for name in ("crossover-rate", "mutation-rate", "weight-area", "weight-delay"):
+    for name in ("crossover-rate", "mutation-rate", "weight-area", "weight-delay", "gamma",
+                 "actor-learning-rate", "critic-learning-rate"):
         parser.add_argument("--" + name, type=float)
     parser.add_argument("--optimization-mode", choices=("pareto", "weighted_sum"),
                         default=argparse.SUPPRESS,
@@ -26,13 +27,20 @@ def main():
     parser.add_argument("--timeout", type=lambda value: None if value.lower() == "none" else float(value),
                         default=argparse.SUPPRESS, help="ABC seconds, or none to disable")
     parser.add_argument("--abc-binary")
+    parser.add_argument("--yosys-binary", help="DRiLLS feature extraction executable")
+    parser.add_argument("--device", help="DRiLLS: auto, cpu, cuda or cuda:N")
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--actor-hidden", type=int, nargs=2, metavar=("H1", "H2"))
+    parser.add_argument("--critic-hidden", type=int, nargs=1, metavar="H")
     parser.add_argument("--objective", help="NSGA-II: lut_count,lut_levels (both minimized)")
     args = parser.parse_args()
     if args.max_tool_calls is not None and args.max_tool_calls < 0:
         parser.error("--max-tool-calls must be nonnegative")
-    if args.algorithm in ("nsga2", "greedy"):
+    if args.algorithm in ("nsga2", "greedy", "drills"):
         from dataclasses import replace
-        if args.algorithm == "greedy":
+        if args.algorithm == "drills":
+            from algorithms.drills.engine import load_config, run, write_results
+        elif args.algorithm == "greedy":
             from algorithms.greedy.engine import load_config, run, write_results
         else:
             from algorithms.nsga2.engine import load_config, run, write_results
@@ -54,6 +62,13 @@ def main():
         context = {"algorithm": args.algorithm, "circuit": experiment["circuit_identity"],
                    "effective_config": experiment["config"], "results_directory": str(directory)}
         with ProgressLogger(directory / "progress.jsonl", context=context) as progress:
+            if args.algorithm == "drills":
+                from algorithms.drills.engine import dependencies
+                try:
+                    dependencies()
+                except ValueError as exc:
+                    print(str(exc), file=sys.stderr)
+                    return 1
             result = run(args.circuit, config, progress=progress)
         result["experiment"] = experiment
         write_results(result, directory=directory)

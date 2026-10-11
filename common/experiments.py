@@ -11,7 +11,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 RUN_ARTIFACTS = ("config.json", "result.json", "best.csv", "best.json", "pareto.json", "progress.jsonl")
 PARAMETERS = (
     ("population_size", "pop"), ("offspring_count", "off"),
-    ("generations", "gen"), ("recipe_length", "len"),
+    ("generations", "gen"), ("episodes", "ep"), ("recipe_length", "len"),
 )
 
 

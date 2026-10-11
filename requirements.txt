@@ -1,2 +1,6 @@
-# Python >= 3.10. Shared evaluator and NSGA-II use only the standard library.
-# config.yaml uses JSON syntax (a YAML subset), parsed with json; no PyYAML needed.
+# Python 3.11 — DRiLLS, NSGA-II, Greedy
+# CPU-only PyTorch by default to avoid large CUDA dependencies.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.7.1+cpu
+numpy==2.2.6

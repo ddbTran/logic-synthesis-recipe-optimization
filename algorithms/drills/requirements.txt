@@ -1,0 +1,2 @@
+# Compatibility entrypoint; the root file is authoritative.
+-r ../../requirements.txt

@@ -2,23 +2,28 @@
 
 Minimal experimental Python repository for comparable QoR measurements in a
 research paper. All nine algorithms, including AST-GWO, are comparison baselines.
-NSGA-II and Sequential Forward Greedy are integrated for reproducible LUT QoR
-collection; the other seven engines remain placeholders. Only small smoke runs
+NSGA-II, Sequential Forward Greedy and DRiLLS are integrated for reproducible LUT QoR
+collection; the other six engines remain placeholders. Only small smoke runs
 have been performed.
 Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
 
 ## Quick start
 
-Use Python 3.10 or newer and an ABC executable exposing the shared actions
-(default: `yosys-abc`). The integrated Python engines require only the standard
-library. Run commands from this repository's root:
+Use Python 3.11 and an ABC executable exposing the shared actions
+(default: `yosys-abc`). DRiLLS also needs Yosys, PyTorch and NumPy; NSGA-II and
+Greedy remain standard-library engines with no PyTorch imports.
+Run commands from this repository's root:
 
 ```bash
-python run.py --help
-python tests/smoke_abc.py --evaluator-only
+command -v python3.11
+python3.11 --version
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python run.py --help
+.venv/bin/python tests/smoke_abc.py --evaluator-only
 
 # Two greedy depths: 32 candidate evaluations plus one baseline invocation.
-python run.py --algorithm greedy \
+.venv/bin/python run.py --algorithm greedy \
   --circuit benchmarks/epfl/arithmetic/adder.aig \
   --recipe-length 2 --max-tool-calls 32 --checkpoint-interval 16 \
   --seed 0 --timeout 60
@@ -38,17 +43,18 @@ common/actions.py   # implemented: action indices and default budget
 common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
 benchmarks/        # pinned EPFL/ISPRAS submodules; 11 ISCAS85 AIG conversions and validation notes
 results/           # ignored smoke evidence and future experiment CSV outputs
-run.py             # NSGA-II / Greedy runner; other engines report not implemented
-requirements.txt   # standard library only for integrated engines; Python >= 3.10
+run.py             # NSGA-II / Greedy / DRiLLS runner
+requirements.txt   # Python 3.11; PyTorch and NumPy for DRiLLS
 ```
 
 | CLI algorithm | Implementation | Optimization modes |
 | --- | --- | --- |
 | `greedy` | Sequential Forward Greedy | `weighted_sum` |
 | `nsga2` | Scalar GA by default; discrete NSGA-II in Pareto mode | `weighted_sum`, `pareto` |
-| Other seven identifiers | Placeholders; exit 2 without ABC execution | None |
+| `drills` | Original DRiLLS A2C port to PyTorch | `weighted_sum` |
+| Other six identifiers | Placeholders; exit 2 without ABC execution | None |
 
-NSGA-II and Greedy each have `engine.py` and `config.yaml`. Empty algorithm
+NSGA-II, Greedy and DRiLLS each have `engine.py` and `config.yaml`. Empty algorithm
 directories contain `.gitkeep`. Each future algorithm gets `engine.py` and
 `config.yaml` for its own hyperparameters when integrated. No dummy engines or
 speculative configurations are supplied. Every engine must import the shared
@@ -230,8 +236,125 @@ retain diagnostics/partial Pareto archive, set legacy `best` to null and write
 no successful CSV. New `best_*` fields retain previously measured scalar
 best-so-far even on failure. Results are ignored by git. Runtimes vary; search
 and paths are reproducible. NSGA-II, its weighted-sum GA variant, and Sequential
-Forward Greedy are implemented; DRiLLS, BOiLS, AST-GWO and the other engines remain
+Forward Greedy and DRiLLS are implemented; BOiLS, AST-GWO and the other engines remain
 placeholders (exit 2, no ABC execution).
+
+## DRiLLS
+
+The [PyTorch A2C implementation](algorithms/drills/engine.py) adapts
+[SCALE Lab's original DRiLLS](https://github.com/scale-lab/DRiLLS), by Hosny,
+Hashemi, Shalan and Reda (ASP-DAC 2020), under the retained
+[BSD-3-Clause license](algorithms/drills/LICENSE). See
+[provenance and deviations](algorithms/drills/PROVENANCE.md) for the source
+comparison, literal loss semantics and finite-return convention.
+
+```bash
+# Requested default run: up to 4,000 candidate calls; not a smoke test.
+.venv/bin/python run.py --algorithm drills \
+  --circuit benchmarks/epfl/arithmetic/adder.aig --seed 0
+
+# Small CPU training run: two complete episodes, three actions each.
+.venv/bin/python run.py --algorithm drills \
+  --circuit benchmarks/epfl/arithmetic/adder.aig --seed 0 \
+  --device cpu --episodes 2 --recipe-length 3 --max-tool-calls 6
+```
+
+The root requirements file is authoritative; the algorithm requirements file
+delegates to it. `.venv/` is ignored. Keep an existing Python 3.11 environment;
+check its version before replacing any environment. Configuration files use the
+existing JSON subset of YAML. Defaults retain a 9→20→20→16 softmax actor,
+9→10→1 critic, gamma 0.99, Adam learning rates 0.01, 100 episodes and recipe
+length 50. Each position is one shared action; ordering and repeats are preserved.
+Training performs one combined actor/critic optimizer update per complete episode.
+
+Use `--device cpu`, `--device cuda`, or `--device auto` (default; CUDA when
+available, otherwise CPU). `cuda:N` also selects a specific GPU. Explicit CUDA
+fails before ABC if unavailable. The requirements default to CPU wheels; to use
+CUDA, first install the matching PyTorch 2.7.1 CUDA wheel for your driver/runtime,
+then install root requirements (which accept that version's CUDA builds).
+For example, with a driver compatible with CUDA 11.8, use the
+[official PyTorch wheel index](https://pytorch.org/get-started/previous-versions/):
+
+```bash
+# CPU-only installation requires no CUDA libraries or GPU allocation.
+.venv/bin/python -m pip install -r requirements.txt
+# Optional CUDA build; only use when a compatible GPU and driver are available.
+.venv/bin/python -m pip install torch==2.7.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python run.py --algorithm drills --circuit benchmarks/epfl/arithmetic/adder.aig --device cuda --episodes 1 --recipe-length 3 --max-tool-calls 3
+.venv/bin/python run.py --algorithm drills --circuit benchmarks/epfl/arithmetic/adder.aig --device auto --episodes 1 --recipe-length 3 --max-tool-calls 3
+```
+
+Equivalent config fields are `"device": "cpu"`, `"device": "cuda"`, or
+`"device": "auto"`. ABC and Yosys must already be installed and on PATH;
+the runner does not install or rebuild them. GPU training may not improve total
+runtime when ABC evaluations dominate.
+
+Networks, training tensors, losses and optimizer parameter computations use the
+resolved device. CUDA action sampling stays on the GPU; CPU runs preserve NumPy
+sampling. Observation/returns preprocessing and ABC/Yosys stay on CPU. Results
+record requested/resolved devices, PyTorch version, CUDA availability/runtime and GPU model.
+Configure executables with `--abc-binary /path/to/abc` and
+`--yosys-binary /path/to/yosys`; `--timeout` applies per process.
+
+At every step, observations describe the current **pre-mapping** circuit,
+exported before LUT mapping. A separate Yosys statistics process and ABC
+statistics process extract the nine features. Mapped QoR supplies the exact reward:
+
+```python
+reward = previous_weighted_fitness - current_weighted_fitness
+```
+
+Fitness reuses Greedy's normalized weighted sum against the original circuit's
+fixed mapped QoR. The baseline is measured once, outside the candidate budget.
+Each episode resets its recipe, previous fitness and running observation
+normalizer; it does not reset the baseline, cache or budget. Best-so-far minimizes
+fitness among all valid evaluated prefixes; `best_complete` tracks full recipes.
+One uncached full-recipe replay costs one evaluation call regardless of length.
+Cache hits reuse QoR and raw observations at zero new calls. Auxiliary feature
+processes have separate counters and are excluded from that budget. Launches
+that fail or time out retain their charges. The first unaffordable cache miss
+terminates the run; partial trajectories are saved but receive no optimizer
+update or bootstrap. Valid best-so-far survives budget exhaustion.
+
+Artifacts follow the existing naming convention:
+`results/drills/<benchmark>/<circuit>/ep<episodes>_len<length>/seed_<seed>/`.
+Other settings, including device, weights, budget and learning rates, are recorded
+in configuration/provenance and do not alter the path. Reruns replace known
+artifacts in that directory; copy results elsewhere before comparing settings
+with the same declared parameters and seed. `config.json`,
+`result.json`, `best.json`, `best.csv` and `progress.jsonl` reuse the shared
+formats. Results include episode rewards, losses, completion and training counts,
+tool identities, circuit/source hashes and failure diagnostics. Checkpoints are
+progress snapshots. `Agent.save/load` separately supports model and optimizer
+files with device mapping; **experiment training resume is unsupported** because
+these files omit RNG, normalizer, environment and budget state.
+Python, NumPy and PyTorch seeds are recorded, but CPU/GPU or different tool/framework
+versions are not claimed to be bitwise reproducible.
+Use `--deterministic` (config `"deterministic": true`) to enable PyTorch
+deterministic algorithms and CUDA workspace settings where supported. Unsupported
+deterministic kernels fail explicitly. CUDA sampling uses PyTorch's RNG rather
+than the original NumPy RNG; CPU and CUDA action sequences can differ. Direct
+dependencies are pinned; transitive versions and tool binaries must also match
+for cross-machine reproduction.
+
+Validated environment: Python 3.11.15, PyTorch 2.7.1+cpu, NumPy 2.2.6,
+Yosys 0.9 and yosys-abc 1.01. Real CUDA training and cross-device checkpoint
+mapping remain untested in this CPU-only environment; unavailable-device
+failure handling is tested.
+
+Focused validation can be run sequentially with:
+
+```bash
+.venv/bin/python tests/test_drills.py -v
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q
+.venv/bin/python tests/smoke_abc.py --evaluator-only
+```
+
+The real ABC CPU test checks that both actor and critic parameters change after
+a complete episode. CUDA training is tested when available; otherwise its test
+is skipped and explicit CUDA-unavailable handling is tested. No full benchmark
+sweep or equivalence of learning curves with TensorFlow is claimed.
 
 ## Sequential Forward Greedy
 

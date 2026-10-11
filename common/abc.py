@@ -65,7 +65,8 @@ def parse_qor(output, metric):
     raise ABCError(f"Missing {metric} print_stats metrics", output)
 
 
-def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", lut_k=None, timeout=60.0):
+def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", lut_k=None, timeout=60.0,
+                    observation_extractor=None):
     """Reload circuit, strash, apply indices, and measure AIG or explicitly K-LUT QoR.
 
     One launched evaluation costs one tool call, independent of recipe length.
@@ -73,6 +74,9 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
     Rejected inputs and definite launch failures cost zero. No cache here.
     timeout=None disables the subprocess deadline. Action markers are diagnostic.
     An unexpected launch exception makes accounting uncertain and stops the run.
+    Optional observation_extractor(path) reads a pre-mapping Verilog export
+    after successful QoR validation, before temporary files are removed. Its
+    auxiliary process accounting belongs to the caller; synthesis stays here.
     """
     recipe = list(recipe)
     if any(type(index) is not int or not 0 <= index < len(TRANSFORMS) for index in recipe):
@@ -102,11 +106,16 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
     with tempfile.TemporaryDirectory(prefix="recipe-abc-") as directory:
         directory = Path(directory)
         # A safe local name avoids interpolating caller paths into ABC commands.
-        local_circuit = directory / ("input" + circuit.suffix)
+        # ABC derives exported Verilog's module name from this stem. "input"
+        # is a reserved Verilog keyword, so observation exports need a safe stem.
+        stem = "circuit" if observation_extractor is not None else "input"
+        local_circuit = directory / (stem + circuit.suffix)
         local_circuit.symlink_to(circuit)
         commands = [f"read {local_circuit.name}", "strash"]
         for position, index in enumerate(recipe):
             commands.extend([TRANSFORMS[index], f"echo {action_prefix}{position}"])
+        if observation_extractor is not None:
+            commands.append("write_verilog observation.v")
         if metric == "lut":
             commands.append(f"if -K {lut_k}")
         commands.extend(["print_stats", f"echo {finished}"])
@@ -148,17 +157,24 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
             process.kill()
             process.wait()
             raise
-    lines = [line.strip() for line in output.splitlines()]
-    confirmed = sum(f"{action_prefix}{i}" in lines for i in range(len(recipe)))
-    # ABC may report command errors while returning exit status zero.
-    errors = re.search(r"(?im)^\s*(?:\*\*\s*cmd error|error\b|unknown command\b|usage:)", output)
-    if process.returncode or errors or finished not in lines or confirmed != len(recipe):
-        raise ABCError(f"ABC evaluation failed (exit {process.returncode}); inspect output", output, confirmed)
-    try:
-        metrics = parse_qor(output, metric)
-    except ABCError as exc:
-        exc.completed_actions = confirmed
-        raise
+        lines = [line.strip() for line in output.splitlines()]
+        confirmed = sum(f"{action_prefix}{i}" in lines for i in range(len(recipe)))
+        # ABC may report command errors while returning exit status zero.
+        errors = re.search(r"(?im)^\s*(?:\*\*\s*cmd error|error\b|unknown command\b|usage:)", output)
+        if process.returncode or errors or finished not in lines or confirmed != len(recipe):
+            raise ABCError(f"ABC evaluation failed (exit {process.returncode}); inspect output", output, confirmed)
+        try:
+            metrics = parse_qor(output, metric)
+        except ABCError as exc:
+            exc.completed_actions = confirmed
+            raise
+        observation = None
+        if observation_extractor is not None:
+            try:
+                observation = observation_extractor(directory / "observation.v")
+            except ABCError as exc:
+                exc.completed_actions = confirmed
+                raise
     return {
         "recipe": recipe,
         "metric": metric,
@@ -171,4 +187,5 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
         "full_recipe_evaluations": 1,
         "runtime_seconds": time.perf_counter() - started,
         "abc_output": output,
+        **({"observation": observation} if observation_extractor is not None else {}),
     }

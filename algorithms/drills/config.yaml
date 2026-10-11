@@ -1,0 +1,22 @@
+{
+  "recipe_length": 50,
+  "episodes": 100,
+  "seed": 0,
+  "max_tool_calls": 4000,
+  "checkpoint_interval": 200,
+  "optimization_mode": "weighted_sum",
+  "objective": "lut_count,lut_levels",
+  "gamma": 0.99,
+  "actor_learning_rate": 0.01,
+  "critic_learning_rate": 0.01,
+  "actor_hidden": [20, 20],
+  "critic_hidden": [10],
+  "lut_k": 6,
+  "weight_area": 0.5,
+  "weight_delay": 0.5,
+  "abc_binary": "yosys-abc",
+  "yosys_binary": "yosys",
+  "timeout": 60,
+  "device": "auto",
+  "deterministic": false
+}
