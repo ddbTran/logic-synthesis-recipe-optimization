@@ -2,8 +2,9 @@
 
 Minimal experimental Python repository for comparable QoR measurements in a
 research paper. All nine algorithms, including AST-GWO, are comparison baselines.
-NSGA-II is integrated for reproducible LUT QoR collection; the other eight
-engines remain placeholders. Only small smoke runs have been performed.
+NSGA-II and Sequential Forward Greedy are integrated for reproducible LUT QoR
+collection; the other seven engines remain placeholders. Only small smoke runs
+have been performed.
 Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
 
 ## Layout and status
@@ -14,12 +15,12 @@ common/actions.py   # implemented: action indices and default budget
 common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
 benchmarks/        # pinned EPFL/ISPRAS submodules; 11 ISCAS85 AIG conversions and validation notes
 results/           # ignored smoke evidence and future experiment CSV outputs
-run.py             # NSGA-II runner; all other engines report not implemented
+run.py             # NSGA-II / Greedy runner; other engines report not implemented
 requirements.txt   # standard library only, including NSGA-II; Python >= 3.10
 ```
 
-NSGA-II has `engine.py` and `config.yaml`. Empty algorithm directories contain
-`.gitkeep`. Each future algorithm gets `engine.py` and
+NSGA-II and Greedy each have `engine.py` and `config.yaml`. Empty algorithm
+directories contain `.gitkeep`. Each future algorithm gets `engine.py` and
 `config.yaml` for its own hyperparameters when integrated. No dummy engines or
 speculative configurations are supplied. Every engine must import the shared
 pool and use shared evaluation; no configuration framework is needed.
@@ -196,9 +197,101 @@ successful candidates produce no CSV and exit 1. Evaluation failures abort,
 retain diagnostics/partial Pareto archive, set legacy `best` to null and write
 no successful CSV. New `best_*` fields retain previously measured scalar
 best-so-far even on failure. Results are ignored by git. Runtimes vary; search
-and paths are reproducible. Only NSGA-II and its weighted-sum GA variant are
-implemented; DRiLLS, Greedy, BOiLS, AST-GWO and the other engines remain
+and paths are reproducible. NSGA-II, its weighted-sum GA variant, and Sequential
+Forward Greedy are implemented; DRiLLS, BOiLS, AST-GWO and the other engines remain
 placeholders (exit 2, no ABC execution).
+
+## Sequential Forward Greedy
+
+Greedy is implemented in [engine.py](algorithms/greedy/engine.py), with one
+[config.yaml](algorithms/greedy/config.yaml) and no extra dependencies. It is an
+independent **Sequential Forward Greedy** implementation; equivalence to any
+paper's Greedy baseline has not been verified.
+
+Start with an empty recipe. At each depth, append each of the 16 shared actions
+to the selected prefix, evaluate each entire candidate from the original
+circuit through the shared ABC evaluator, and choose the lowest weighted fitness.
+Equal fitness selects the lowest action index. Actions may repeat. Continue even
+when the selected extension is worse than the preceding prefix. There is no
+randomness, restart, beam, local search or evolutionary operation; seed is
+retained for experiment identity. Fixed configuration, circuit and ABC bytes
+produce the same search decisions.
+
+Only `weighted_sum` is supported. The engine reuses NSGA-II's normalized formula:
+
+```text
+fitness = weight_area * (lut_count / baseline_lut_count)
+        + weight_delay * (lut_levels / baseline_lut_levels)
+```
+
+Lower is better. Weights must be finite, nonnegative and sum to 1 within 1e-9.
+The baseline reloads the original circuit with an empty recipe and the existing
+LUT mapping. Its one invocation uses a separate budget, recorded as
+`baseline_tool_calls=1` and `baseline_evaluations=1`, outside the candidate
+`max_tool_calls` limit, exactly as in the current NSGA-II engine. Total
+`abc_process_invocations` includes both baseline and candidates.
+
+Each uncached candidate costs **one tool call regardless of recipe length**.
+Ordered recipe tuples are cached within a fixed run; hits cost zero calls and
+increase only `cache_hits` and `candidate_attempts`. Failed or invalid QoR is
+never cached as a success. `evaluations` / `successful_evaluations` count only
+valid, uncached candidate measurements. `candidate_attempts` also counts a
+budget-rejected proposal. No evaluation exceeds the remaining candidate budget.
+
+Defaults: recipe length 20, seed 0, max tool calls 4000, checkpoint interval 200,
+mode `weighted_sum`, LUT K=6, weights 0.5/0.5, binary `yosys-abc`, timeout 60 seconds.
+A complete search makes 16 evaluations per depth, so the default stops after
+**320 candidate calls plus one baseline**, leaving the rest of the budget unused.
+It finishes after reaching its target length; it does not spend spare calls on
+additional search methods.
+
+```bash
+# Small real-ABC smoke run; not a full benchmark experiment.
+python run.py --algorithm greedy --circuit benchmarks/epfl/arithmetic/adder.aig --recipe-length 2 --max-tool-calls 32 --checkpoint-interval 16 --seed 0
+python -m unittest discover -s tests -p test_greedy.py -v
+```
+
+CLI overrides: `--config PATH` (JSON-subset YAML), `--recipe-length`, `--seed`,
+`--max-tool-calls`, `--checkpoint-interval`, `--optimization-mode weighted_sum`,
+`--lut-k`, `--weight-area`, `--weight-delay`, `--abc-binary` and `--timeout` (seconds,
+or `none` to disable). Pareto mode, unknown configuration keys, and NSGA-II-only
+search options are rejected before evaluation.
+
+Results follow the shared directory policy, for example
+`results/greedy/epfl/adder/len2/seed_0/`. Only recipe length and seed vary this
+path; other settings are recorded in the configuration. A rerun replaces the
+known artifacts in that directory and preserves unrelated files:
+
+- `config.json`: complete effective configuration, seed, circuit and ABC identities.
+- `progress.jsonl`: configuration, baseline, improvement, checkpoint, step and
+  summary events, including counters, best QoR/fitness, elapsed time and status.
+  `depth`, `target_depth`, `completed_depth` and `depth_candidates_evaluated`
+  describe search progress. Checkpoints use cumulative candidate tool calls.
+  Terminal output shows the circuit, baseline, one line per completed depth and
+  final result path; individual candidates are never logged as separate events.
+- `result.json`: configuration, provenance (including input/tool hashes),
+  counters, termination status and failures. `best` / `best_so_far` track the
+  globally best valid candidate, including shorter prefixes and alternatives
+  seen at a partial depth. `best_complete` is the best evaluated target-length
+  candidate, or null. `constructed_recipe` / `constructed_solution` preserve
+  the prefix selected after fully comparing all actions at each completed depth.
+- `best.json` and `best.csv`: the global scalar winner. No Pareto archive is
+  generated. With no valid candidate, `best.json` is null and no CSV is written.
+
+`completed` means all target depths compared all 16 actions. `budget_exhausted`
+may leave a partial depth: retain every valid candidate seen, but do not commit
+that depth's selection or pad the recipe. A target-length candidate can therefore
+exist while `constructed_recipe` is shorter and status is `budget_exhausted`.
+ABC errors or invalid metrics abort with `failed`, diagnostics and null `best`;
+previous valid measurements remain in `best_so_far`, and no successful CSV is
+written. Baseline metrics must be positive integers; candidate metrics must be
+nonnegative integers. Keyboard interruption propagates as in NSGA-II; old result
+artifacts are removed before execution and the evaluator stops its child process.
+
+Greedy makes irreversible prefix choices and evaluates only single-action
+extensions. It cannot revisit earlier decisions or explore combinations that
+initially look worse; it has no global-optimality guarantee or Pareto tradeoff
+search. This is a deterministic reference method for the shared objective.
 
 ## Common convergence progress
 
@@ -281,7 +374,7 @@ those sources, not installed requirements of this repository.
 | FlowTune | [FlowTune](https://github.com/Yu-Maryland/FlowTune): `FlowTune-AIG-Optimization/single_design.sh`, `src/src/base/abci/abc.c` (`ftune`) | Custom ABC C/C++ command, readline, OpenMP, build tools; optional Yosys/VTR flows. Internal actions need observable accounting. |
 | CB-EVO | [CB-EVO](https://github.com/sallyliu921/CB-EVO): `src/main.cpp`, `bandit.hpp`, `evolution.hpp` | C++17, CMake, OpenMP, Eigen, ABC; optional Yosys/ccirc feature extraction. Native implementation, not a Python engine. |
 | RL4LS | [RL4LS](https://github.com/Gabriel-in-Toronto/RL4LS): `RL/PPO.py`, `RL/Env.py`, `RL/Feature_extractor.py` | Stable Baselines3, PyTorch, Gym, NumPy, PyYAML, icecream, ABC, modified ccirc. `PPO.py` constructs A2C despite importing PPO; resolve source inconsistency. Modified ccirc requires obtaining the authors' implementation. |
-| Greedy | [DRiLLS greedy](https://github.com/scale-lab/DRiLLS/tree/master/baseline/greedy): `baseline/greedy/greedy.py` | PyYAML, joblib, ABC; decide tie-breaking, stopping, and budget policy. |
+| Greedy | [DRiLLS greedy](https://github.com/scale-lab/DRiLLS/tree/master/baseline/greedy): `baseline/greedy/greedy.py` | Historical source reference only. The integrated Sequential Forward Greedy is independent and does not claim equivalence to this baseline. |
 
 The supplied `../example/drill_logic_synthesis.py` also uses the exact shared pool
 and ABC LUT parsing, but explicitly substitutes linear-policy REINFORCE for

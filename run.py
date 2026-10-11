@@ -1,4 +1,4 @@
-"""Research runner: NSGA-II integrated; other engines remain placeholders."""
+"""Research runner: NSGA-II and Sequential Forward Greedy integrated."""
 
 import argparse
 import sys
@@ -10,12 +10,12 @@ ALGORITHMS = (
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II integrated).")
+    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II and Greedy integrated).")
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
-    parser.add_argument("--seed", type=int, help="Random seed (NSGA-II default: 0)")
+    parser.add_argument("--seed", type=int, help="Experiment seed (default: 0)")
     parser.add_argument("--max-tool-calls", type=int, help="ABC sequence evaluation invocation budget override; BOiLS requires an explicit budget")
-    parser.add_argument("--config", help="NSGA-II JSON-subset YAML configuration")
+    parser.add_argument("--config", help="Algorithm JSON-subset YAML configuration")
     for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval"):
         parser.add_argument("--" + name, type=int)
     for name in ("crossover-rate", "mutation-rate", "weight-area", "weight-delay"):
@@ -30,9 +30,12 @@ def main():
     args = parser.parse_args()
     if args.max_tool_calls is not None and args.max_tool_calls < 0:
         parser.error("--max-tool-calls must be nonnegative")
-    if args.algorithm == "nsga2":
+    if args.algorithm in ("nsga2", "greedy"):
         from dataclasses import replace
-        from algorithms.nsga2.engine import load_config, run, write_results
+        if args.algorithm == "greedy":
+            from algorithms.greedy.engine import load_config, run, write_results
+        else:
+            from algorithms.nsga2.engine import load_config, run, write_results
 
         overrides = {key: value for key, value in vars(args).items()
                      if key not in ("algorithm", "circuit", "config", "timeout")}
@@ -46,15 +49,15 @@ def main():
         from common.experiments import describe_experiment, prepare_run
         from common.progress import ProgressLogger
 
-        experiment = describe_experiment("nsga2", args.circuit, asdict(config))
+        experiment = describe_experiment(args.algorithm, args.circuit, asdict(config))
         directory = prepare_run(experiment)
-        context = {"algorithm": "nsga2", "circuit": experiment["circuit_identity"],
+        context = {"algorithm": args.algorithm, "circuit": experiment["circuit_identity"],
                    "effective_config": experiment["config"], "results_directory": str(directory)}
         with ProgressLogger(directory / "progress.jsonl", context=context) as progress:
             result = run(args.circuit, config, progress=progress)
         result["experiment"] = experiment
         write_results(result, directory=directory)
-        print(f"nsga2: {result['status']}; tool_calls={result['tool_calls']}; results={directory}", flush=True)
+        print(f"{args.algorithm}: {result['status']}; tool_calls={result['tool_calls']}; results={directory}", flush=True)
         if result["failure"]:
             print(result["failure"]["message"], file=sys.stderr)
         return 0 if result["status"] != "failed" and result["best"] is not None else 1

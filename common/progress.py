@@ -54,7 +54,7 @@ class ProgressLogger:
             circuit = event["circuit"].removeprefix("repo/")
             print(f"{event['algorithm']}: circuit={circuit}", flush=True)
             return
-        if event["event"] not in ("baseline", "generation"):
+        if event["event"] not in ("baseline", "generation", "step"):
             return
         is_baseline = event["event"] == "baseline"
         best = event["baseline_qor"] if is_baseline else event["best"]
@@ -69,7 +69,9 @@ class ProgressLogger:
             selection = f"pareto={event['pareto_size']}"
         percent = event["budget_utilization_percent"]
         utilization = f"{percent:.2f}%" if percent is not None else "unknown"
-        print(f"{event['algorithm']} generation {event['generation']}/{event['generations']}: "
+        position = (f"depth {event['depth']}/{event['target_depth']}" if "depth" in event
+                    else f"generation {event['generation']}/{event['generations']}")
+        print(f"{event['algorithm']} {position}: "
               f"mode={mode}; {qor}; {selection}; "
               f"ABC calls={event['tool_calls']}/{event['max_tool_calls']} ({utilization}); "
               f"cache_hits={event['cache_hits']}; elapsed={event['elapsed_seconds']:.3f}s; "

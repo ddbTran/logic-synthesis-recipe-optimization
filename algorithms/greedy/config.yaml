@@ -1,0 +1,12 @@
+{
+  "recipe_length": 20,
+  "seed": 0,
+  "max_tool_calls": 4000,
+  "checkpoint_interval": 200,
+  "optimization_mode": "weighted_sum",
+  "lut_k": 6,
+  "weight_area": 0.5,
+  "weight_delay": 0.5,
+  "abc_binary": "yosys-abc",
+  "timeout": 60
+}
