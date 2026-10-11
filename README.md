@@ -11,7 +11,7 @@ Benchmark environment smoke checks are documented in [benchmarks/README.md](benc
 algorithms/{ast_gwo,drills,nsga2,erl_ls,boils,flowtune,cb_evo,rl4ls,greedy}/
 common/actions.py   # implemented: action indices and default budget
 common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
-benchmarks/        # pinned EPFL/ISCAS85 submodules; c17 conversion and validation notes
+benchmarks/        # pinned EPFL/ISPRAS submodules; 11 ISCAS85 AIG conversions and validation notes
 results/           # ignored smoke evidence and future experiment CSV outputs
 run.py             # argparse entry point; all engines report not implemented
 requirements.txt   # standard library only; Python >= 3.10
@@ -85,7 +85,9 @@ ABC is not a general RTL compiler. The default executable is `yosys-abc`; overri
 `/usr/bin/yosys-abc` (ABC 1.01), and its command help exposes `&dsdb` and `&sopb`.
 All 16 actions and LUT-6 mapping now pass smoke checks on EPFL ctrl and converted
 ISCAS85 c17; see [benchmark validation](benchmarks/README.md) for measurements and
-provenance limitations. Validation of the remaining circuits is still pending.
+provenance limitations. All 11 ISCAS85 AIG conversions pass source equivalence;
+EPFL adder also passes read/mapping checks. Full-suite action compatibility is
+still pending.
 
 ## Runner and future results
 

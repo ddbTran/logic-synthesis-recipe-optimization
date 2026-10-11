@@ -1,7 +1,8 @@
-"""Small real-tool checks only: two inputs, baselines, and each shared action."""
+"""Real-tool checks: three input baselines; shared actions on ctrl and c17."""
 
 import argparse
 import csv
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -26,8 +27,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="c17-conversion-") as directory:
         destination = Path(directory) / "c17.aig"
         command = (
-            "read_verilog benchmarks/iscas85/c17.v; hierarchy -check -top c17; "
-            f"techmap; aigmap; write_aiger {destination}"
+            "read_verilog benchmarks/iscas85/iscas85/verilog/c17.v; hierarchy -check -top c17; "
+            f"techmap; aigmap; write_aiger -symbols {destination}"
         )
         try:
             process = subprocess.run(
@@ -52,13 +53,15 @@ def main():
     circuits = [
         "benchmarks/epfl/random_control/ctrl.aig",
         "benchmarks/converted/iscas85/c17.aig",
+        "benchmarks/epfl/arithmetic/adder.aig",
     ]
     with (output / "checks.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for circuit in circuits:
             checks = [("baseline_aig", [], "aig"), ("baseline_lut", [], "lut")]
-            checks += [(f"action_{i:02}", [i], "lut") for i in range(len(TRANSFORMS))]
+            if circuit in circuits[:2]:
+                checks += [(f"action_{i:02}", [i], "lut") for i in range(len(TRANSFORMS))]
             for name, recipe, metric in checks:
                 row = {
                     "circuit": circuit, "check": name, "metric": metric,
@@ -76,6 +79,10 @@ def main():
                     )
                     if result["tool_calls"] != len(recipe) or budget.tool_calls != len(recipe):
                         raise RuntimeError("Action accounting mismatch")
+                    label = "and" if metric == "aig" else "nd"
+                    raw = re.findall(rf"\b{label}\s*=\s*(\d+).*?\blev\s*=\s*(\d+)", result["abc_output"])
+                    if not raw or tuple(map(int, raw[-1])) != tuple(result["metrics"].values()):
+                        raise RuntimeError("Raw ABC statistics differ from parsed QoR")
                     row.update(result["metrics"], tool_calls=result["tool_calls"],
                                runtime_seconds=result["runtime_seconds"], status="PASS")
                     log = result["abc_output"]
