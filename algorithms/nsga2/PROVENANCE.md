@@ -116,28 +116,22 @@ algorithm being compared. No particular comparison algorithm is assumed.
 The runner resolves defaults and CLI overrides before opening a run directory:
 
 ```
-results/nsga2/repo/benchmarks/<suite>/<circuit-with-extension>/<mode>/<effective-config>/seed_<seed>/
+results/nsga2/<benchmark>/<circuit-stem>/pop40_off40_gen99_len20_cfg<12-hex>/seed_<seed>/
 ```
 
-Circuit identity uses the resolved repository-relative path prefixed with
-`repo/`, or the resolved absolute path prefixed with `external/` for outside
-inputs. Suites and extensions remain part of the identity, avoiding basename
-collisions. Config parameters appear in fixed order:
-`pop`, `off`, `gen`, `len`, `b`, `cr`, `mr`, `k`, `t`, `wa`, `wd`, `obj`, `abc`,
-then `exe` for the resolved ABC executable path. Mode has its own directory;
-seed has its own final directory. Future config fields are appended in sorted
-name order. Every resolved config field is represented. Unsafe path characters
-and underscores inside parameter values use reversible percent encoding.
-Float text retains round-trip precision, and integral numeric settings have
-canonical integer text. Long configs continue across ordered path components
-of at most 200 characters. No random IDs, timestamps or config hashes appear
-in directory names.
+EPFL inputs use `epfl/<circuit>`; converted ISCAS85 inputs use
+`iscas85/<circuit>`. Other inputs use their parent directory name as the benchmark.
+Population, offspring count, generations and recipe length remain readable.
+A deterministic 12-hex SHA-256 suffix covers all effective config fields except
+seed, full circuit identity (including extension), and resolved executable path,
+so modes and other settings cannot silently share the same readable config name.
+Seed has its own final directory. No random IDs or timestamps are used.
 
 `config.json` stores the complete resolved config including seed, metric,
 circuit identity/path/checksum, and requested/resolved ABC executable identity
-and checksum. File content hashes are provenance metadata, not directory names;
-replacing a circuit or executable at the same path overwrites the same
-experiment directory, recording its new checksum.
+and checksum. Circuit/executable content hashes remain provenance metadata;
+replacing their bytes at the same path overwrites the same experiment directory.
+Older directory layouts are preserved.
 
 At CLI run start, only `config.json`, `result.json`, `best.csv`, `best.json`,
 `pareto.json` and `progress.jsonl` in that seed directory are replaced. Other
@@ -152,7 +146,8 @@ Library callers may use `describe_experiment` and `prepare_run` before calling
 `write_results` with only a root also uses the deterministic identity, replacing
 known outputs at write time. Finalization preserves the CLI's live progress log.
 The existing flushed logger records algorithm, suite-qualified circuit,
-effective config and results directory alongside optimization progress.
+effective config and results directory in JSONL. Terminal output prints the
+circuit path only at startup and the results path only after artifacts are written.
 
 Ordinary budget exhaustion is a labeled partial run, with genuine measured best
 and archive if available; insufficient budget for one recipe writes no CSV.

@@ -51,9 +51,8 @@ class ProgressLogger:
         self.stream.write(json.dumps(event, sort_keys=True) + "\n")
         self.stream.flush()
         if event["event"] == "configuration":
-            print(f"{event['algorithm']} configuration: circuit={event['circuit']}; "
-                  f"results={event.get('results_directory', 'not written')}; "
-                  + json.dumps(event["config"], sort_keys=True), flush=True)
+            circuit = event["circuit"].removeprefix("repo/")
+            print(f"{event['algorithm']}: circuit={circuit}", flush=True)
             return
         best = event["best"]
         qor = f"LUTs={best['lut_count']} levels={best['lut_levels']}" if best else "LUTs=n/a levels=n/a"
@@ -69,8 +68,7 @@ class ProgressLogger:
         percent = event["budget_utilization_percent"]
         utilization = f"{percent:.2f}%" if percent is not None else "unknown"
         print(f"{event['algorithm']} {event['event']} {event['generation']}/{event['generations']}: "
-              f"circuit={event['circuit']}; "
               f"mode={mode}; {qor}; {selection}; "
               f"ABC calls={event['tool_calls']}/{event['max_tool_calls']} ({utilization}); "
               f"cache_hits={event['cache_hits']}; elapsed={event['elapsed_seconds']:.3f}s; "
-              f"status={event['status']}; results={event.get('results_directory', 'not written')}", flush=True)
+              f"status={event['status']}", flush=True)

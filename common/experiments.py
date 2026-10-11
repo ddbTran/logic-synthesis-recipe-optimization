@@ -10,10 +10,8 @@ from urllib.parse import quote
 REPOSITORY = Path(__file__).resolve().parents[1]
 RUN_ARTIFACTS = ("config.json", "result.json", "best.csv", "best.json", "pareto.json", "progress.jsonl")
 PARAMETERS = (
-    ("population_size", "pop"), ("offspring_count", "off"), ("generations", "gen"),
-    ("recipe_length", "len"), ("max_tool_calls", "b"), ("crossover_rate", "cr"),
-    ("mutation_rate", "mr"), ("lut_k", "k"), ("timeout", "t"),
-    ("weight_area", "wa"), ("weight_delay", "wd"), ("objective", "obj"), ("abc_binary", "abc"),
+    ("population_size", "pop"), ("offspring_count", "off"),
+    ("generations", "gen"), ("recipe_length", "len"),
 )
 
 
@@ -49,35 +47,24 @@ def component(value):
 
 
 def experiment_path(experiment, root="results"):
-    """All effective config fields except seed are encoded, with no config hash."""
+    """Compact readable labels with a stable suffix for the complete identity."""
     config = experiment["config"]
-    labels = dict(PARAMETERS)
-    fields = [name for name, _ in PARAMETERS if name in config]
-    fields += sorted(set(config) - set(fields) - {"seed", "optimization_mode"})
-    # Underscores delimit parameters and must be escaped inside parameter values.
-    tokens = [labels.get(name, component(name).replace("_", "%5F") + "=")
-              + component(config[name]).replace("_", "%5F") for name in fields]
-    tokens.append("exe" + component(experiment["abc_executable"]["resolved"]).replace("_", "%5F"))
-    # Most configs fit one directory. Long paths/extra parameters spill into
-    # ordered readable components rather than exceeding filesystem NAME_MAX.
-    chunks = []
-    current = ""
-    for token in tokens:
-        while len(token) > 200:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.append(token[:200])
-            token = "+" + token[200:]
-        if current and len(current) + 1 + len(token) > 200:
-            chunks.append(current)
-            current = ""
-        current = current + "_" + token if current else token
-    if current:
-        chunks.append(current)
-    circuit = [component(part) for part in experiment["circuit_identity"].split("/")]
-    return (Path(root) / component(experiment["algorithm"]) / Path(*circuit)
-            / component(config["optimization_mode"]) / Path(*chunks) / f"seed_{config['seed']}")
+    identity = experiment["circuit_identity"]
+    parts = identity.split("/")
+    if parts[:2] == ["repo", "benchmarks"]:
+        suite = parts[3] if parts[2] == "converted" else parts[2]
+    else:
+        suite = Path(experiment["circuit"]).parent.name or "external"
+    circuit = Path(experiment["circuit"]).stem
+    # Keep seeds as siblings. The suffix distinguishes modes, less common
+    # settings, input paths/extensions and executables without spelling them out.
+    key = {"config": {name: value for name, value in config.items() if name != "seed"},
+           "circuit_identity": identity, "executable": experiment["abc_executable"]["resolved"]}
+    suffix = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:12]
+    tokens = [label + component(config[name]) for name, label in PARAMETERS if name in config]
+    label = "_".join([*tokens, "cfg" + suffix])
+    return (Path(root) / component(experiment["algorithm"]) / component(suite)
+            / component(circuit) / label / f"seed_{config['seed']}")
 
 
 def ensure_directory(directory):

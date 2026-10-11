@@ -161,12 +161,18 @@ sequence costs one tool call regardless of recipe length. Cache hits launch no A
 Stop at the first cache miss with no remaining calls; never truncate recipes.
 Fixed seed/config/input/ABC bytes give reproducible search and best selection.
 
-Results retain the deterministic layout
-`results/algorithm/circuit/optimization_mode/config/seed_<seed>/`.
-Circuit identities include the suite and file extension; every effective config
-field is encoded, with seed in the final directory. Long configs may span
-ordered path components. No random run IDs are used. Identical configurations
-replace only known artifacts in their own directory; other files are preserved.
+Results use the compact deterministic layout
+`results/<algorithm>/<benchmark>/<circuit>/<config>/seed_<seed>/`, for example:
+`results/nsga2/epfl/adder/pop40_off40_gen99_len20_cfg<12-hex>/seed_7/`.
+The readable config label shows population, offspring, generations and recipe
+length. A short deterministic suffix distinguishes all effective config settings
+(including mode), circuit paths/extensions and the resolved executable. Seed
+remains in the final directory and full details remain in `config.json`.
+Identical configurations replace only known artifacts in their own directory;
+other files and older-layout directories are preserved. No random run IDs are used.
+Terminal output shows the circuit path once at the beginning, progress counters
+without repeated paths, and the results path once at the end. JSONL retains
+complete metadata on every event.
 
 - `config.json`: effective configuration including seed and input/tool identities.
 - `progress.jsonl`: flushed configuration, baseline (weighted mode), improvement,

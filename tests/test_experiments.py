@@ -33,9 +33,10 @@ class ExperimentTests(unittest.TestCase):
         sibling = x.experiment_path(self.describe(replace(e.Config(), seed=1)))
         self.assertEqual(first.parent, sibling.parent)
         self.assertEqual((first.name, sibling.name), ("seed_0", "seed_1"))
-        self.assertIn("weighted_sum", first.parts)
-        self.assertEqual(first.parts[:6], ("results", "nsga2", "repo", "benchmarks", "converted", "iscas85"))
-        self.assertIn("pop40_off40_gen99_len20_b4000_cr0.9_mr0.05_k6_t60_wa0.5_wd0.5", str(first))
+        self.assertEqual(first.parts[:4], ("results", "nsga2", "iscas85", "c17"))
+        self.assertRegex(first.parent.name, r"^pop40_off40_gen99_len20_cfg[0-9a-f]{12}$")
+        epfl = x.experiment_path(self.describe(circuit=ROOT / "benchmarks/epfl/arithmetic/adder.aig"))
+        self.assertEqual(epfl.parts[:4], ("results", "nsga2", "epfl", "adder"))
 
     def test_every_config_field_and_resolved_executable_affect_path(self):
         original = self.describe()

@@ -247,6 +247,12 @@ class NSGA2Tests(unittest.TestCase):
                 self.assertEqual(events[-1]["best"], result["best"])
                 self.assertIn("ABC calls=4/4 (100.00%)", process.stdout)
                 self.assertIn("generation 1/1", process.stdout)
+                lines = process.stdout.splitlines()
+                self.assertIn("circuit=", lines[0])
+                self.assertIn("results=", lines[-1])
+                self.assertEqual(process.stdout.count("circuit="), 1)
+                self.assertEqual(process.stdout.count("results="), 1)
+                self.assertNotIn("effective_config", process.stdout)
         for key in ("best", "pareto", "tool_calls", "cache_hits"):
             self.assertEqual(results[0][key], results[1][key])
 
