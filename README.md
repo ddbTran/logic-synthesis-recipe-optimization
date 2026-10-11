@@ -2,8 +2,8 @@
 
 Minimal experimental Python repository for comparable QoR measurements in a
 research paper. All nine algorithms, including AST-GWO, are comparison baselines.
-NSGA-II, Sequential Forward Greedy and DRiLLS are integrated for reproducible LUT QoR
-collection; the other six engines remain placeholders. Only small smoke runs
+NSGA-II, Sequential Forward Greedy, DRiLLS, BOiLS and AST-GWO are integrated for
+reproducible LUT QoR collection; the other four engines remain placeholders. Only small smoke runs
 have been performed.
 Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
 
@@ -52,9 +52,11 @@ requirements.txt   # Python 3.11; PyTorch and NumPy for DRiLLS
 | `greedy` | Sequential Forward Greedy | `weighted_sum` |
 | `nsga2` | Scalar GA by default; discrete NSGA-II in Pareto mode | `weighted_sum`, `pareto` |
 | `drills` | Original DRiLLS A2C port to PyTorch | `weighted_sum` |
-| Other six identifiers | Placeholders; exit 2 without ABC execution | None |
+| `boils` | BOiLS string-subsequence GP with EI | `weighted_sum` |
+| `ast_gwo` | Adaptive sigmoid transfer binary GWO | `weighted_sum` |
+| Other four identifiers | Placeholders; exit 2 without ABC execution | None |
 
-NSGA-II, Greedy and DRiLLS each have `engine.py` and `config.yaml`. Empty algorithm
+NSGA-II, Greedy, DRiLLS, BOiLS and AST-GWO each have `engine.py` and `config.yaml`. Empty algorithm
 directories contain `.gitkeep`. Each future algorithm gets `engine.py` and
 `config.yaml` for its own hyperparameters when integrated. No dummy engines or
 speculative configurations are supplied. Every engine must import the shared
@@ -565,3 +567,36 @@ track and objective (including Pareto reporting), LUT K or ASIC library/constrai
 circuit suite, recipe lengths, seeds, per-algorithm hyperparameters, and policies
 for training, cache hits and failures. Preserve core algorithms and document the
 required shared-pool/evaluator adaptation. Confirm source licenses before copying.
+
+## AST-GWO
+
+AST-GWO is integrated as a binary Grey Wolf Optimizer with the original adaptive
+sigmoid transfer, historical alpha/beta/delta leaders and four-bit action codec.
+It uses the shared original-circuit baseline, normalized weighted objective,
+ordered 16-action pool and global recipe-evaluation budget. NumPy is its only
+non-standard-library dependency (already installed for the other engines).
+
+```bash
+.venv/bin/python run.py --algorithm ast_gwo \
+  --circuit benchmarks/epfl/arithmetic/adder.aig \
+  --recipe-length 20 --population-size 50 --generations 200 \
+  --max-tool-calls 4000 --seed 0 --k-min 6 --k-max 14
+
+.venv/bin/python -m unittest discover -s tests -p test_ast_gwo.py -v
+```
+
+Defaults are in `algorithms/ast_gwo/config.yaml`. `--config` and CLI overrides
+follow the existing engine conventions. Results go to
+`results/ast_gwo/epfl/adder/pop50_gen200_len20/seed_0/`, including progress JSONL,
+config/result/best JSON and best CSV. Reruns replace the same known artifacts.
+Initial population is generation zero; `completed_iterations` counts completed
+moves and `population_evaluated` describes the current, possibly partial,
+population. Budget exhaustion preserves the best valid evaluated recipe.
+Failures retain previous measurements in `best_so_far`, following the other
+engines' failure policy. Finite runs can complete without spending the full
+budget because cache hits cost zero.
+
+See [AST-GWO provenance](algorithms/ast_gwo/PROVENANCE.md) for exact equations,
+coefficient timing, upstream-source comparisons, required adaptations and
+limitations. This baseline preserves search mechanisms; it does not reproduce
+the original paper's numerical results.

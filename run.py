@@ -1,4 +1,4 @@
-"""Research runner: NSGA-II, Greedy, DRiLLS and BOiLS integrated."""
+"""Research runner: NSGA-II, Greedy, DRiLLS, BOiLS and AST-GWO integrated."""
 
 import argparse
 import sys
@@ -10,7 +10,7 @@ ALGORITHMS = (
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II, Greedy, DRiLLS and BOiLS integrated).")
+    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II, Greedy, DRiLLS, BOiLS and AST-GWO integrated).")
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
     parser.add_argument("--seed", type=int, help="Experiment seed (default: 0)")
@@ -22,7 +22,7 @@ def main():
                  "tr-success-tolerance", "tr-failure-tolerance"):
         parser.add_argument("--" + name, type=int)
     for name in ("crossover-rate", "mutation-rate", "weight-area", "weight-delay", "gamma",
-                 "actor-learning-rate", "critic-learning-rate", "tr-multiplier"):
+                 "actor-learning-rate", "critic-learning-rate", "tr-multiplier", "k-min", "k-max"):
         parser.add_argument("--" + name, type=float)
     parser.add_argument("--optimization-mode", choices=("pareto", "weighted_sum"),
                         default=argparse.SUPPRESS,
@@ -41,9 +41,11 @@ def main():
     args = parser.parse_args()
     if args.max_tool_calls is not None and args.max_tool_calls < 0:
         parser.error("--max-tool-calls must be nonnegative")
-    if args.algorithm in ("nsga2", "greedy", "drills", "boils"):
+    if args.algorithm in ("nsga2", "greedy", "drills", "boils", "ast_gwo"):
         from dataclasses import replace
-        if args.algorithm == "boils":
+        if args.algorithm == "ast_gwo":
+            from algorithms.ast_gwo.engine import load_config, run, write_results
+        elif args.algorithm == "boils":
             from algorithms.boils.engine import load_config, run, write_results
         elif args.algorithm == "drills":
             from algorithms.drills.engine import load_config, run, write_results
