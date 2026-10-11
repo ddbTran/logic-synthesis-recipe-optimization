@@ -151,7 +151,7 @@ class ExperimentTests(unittest.TestCase):
                 self.assertEqual(runner.main(), 1)
             result = json.loads((directory / "result.json").read_text())
             self.assertEqual(result["status"], "failed")
-            self.assertEqual(result["tool_calls"], 1)
+            self.assertEqual(result["tool_calls"], 0)
             self.assertFalse((directory / "best.csv").exists())
             self.assertFalse((directory / "pareto.json").exists())
             self.assertIsNone(json.loads((directory / "best.json").read_text()))
@@ -163,7 +163,7 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(metadata["abc_executable"]["sha256"], result["provenance"]["abc_sha256"])
             events = [json.loads(line) for line in (directory / "progress.jsonl").read_text().splitlines()]
             self.assertEqual(events[-1]["status"], "failed")
-            self.assertEqual(events[-1]["tool_calls"], 1)
+            self.assertEqual(events[-1]["tool_calls"], 0)
             self.assertTrue(all(event["results_directory"] == str(directory) for event in events))
             self.assertTrue(all(event["effective_config"] == asdict(config) for event in events))
 

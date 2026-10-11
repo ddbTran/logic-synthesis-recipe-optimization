@@ -35,12 +35,12 @@ class ProgressTests(unittest.TestCase):
 
     def test_schema_thresholds_and_weighted_best(self):
         result, events, checkpoints = self.run_engine(self.config())
-        self.assertEqual([p["checkpoint_thresholds"] for p in checkpoints], [[2], []])
-        self.assertEqual([p["tool_calls"] for p in checkpoints], [2, 3])
-        self.assertEqual([p["evaluations"] for p in checkpoints], [1, 2])
-        self.assertEqual([p["best_fitness"] for p in checkpoints], [0.5, 0.5])
+        self.assertEqual([p["checkpoint_thresholds"] for p in checkpoints], [[2]])
+        self.assertEqual([p["tool_calls"] for p in checkpoints], [2])
+        self.assertEqual([p["evaluations"] for p in checkpoints], [2])
+        self.assertEqual([p["best_fitness"] for p in checkpoints], [0.5])
         self.assertEqual([(p["best_lut_count"], p["best_lut_levels"]) for p in checkpoints],
-                         [(2, 8), (2, 8)])
+                         [(2, 8)])
         for checkpoint in checkpoints:
             self.assertIs(type(checkpoint["best_fitness"]), float)
             self.assertIs(type(checkpoint["best_lut_count"]), int)
@@ -59,28 +59,33 @@ class ProgressTests(unittest.TestCase):
             i for i, event in enumerate(events) if event["event"] == "generation"))
 
     def test_final_checkpoint_below_interval_and_budget_exhaustion(self):
-        result, _, checkpoints = self.run_engine(self.config(checkpoint_interval=200, max_tool_calls=2))
+        result, _, checkpoints = self.run_engine(self.config(checkpoint_interval=200, max_tool_calls=1))
         self.assertEqual(result["status"], "budget_exhausted")
-        self.assertEqual(result["tool_calls"], 2)
+        self.assertEqual(result["tool_calls"], 1)
         self.assertEqual(result["evaluations"], 1)
         self.assertEqual(result["candidate_attempts"], 2)
         self.assertEqual(len(checkpoints), 1)
         self.assertEqual(checkpoints[0]["checkpoint_thresholds"], [])
         self.assertEqual(checkpoints[0]["status"], "budget_exhausted")
         result, _, checkpoints = self.run_engine(self.config(max_tool_calls=0))
-        self.assertEqual(result["baseline_evaluations"], 0)
+        self.assertEqual(result["baseline_evaluations"], 1)
         self.assertEqual(result["evaluations"], 0)
         self.assertEqual(checkpoints[0]["tool_calls"], 0)
         self.assertIsNone(checkpoints[0]["best_fitness"])
 
-    def test_baseline_crossing_counts_one_sequence(self):
-        result, _, checkpoints = self.run_engine(self.config(checkpoint_interval=1))
-        self.assertEqual([p["tool_calls"] for p in checkpoints], [1, 2, 3])
-        self.assertEqual([p["checkpoint_thresholds"] for p in checkpoints], [[1], [2], [3]])
-        self.assertEqual(checkpoints[0]["evaluations"], 0)
-        self.assertEqual(checkpoints[0]["baseline_evaluations"], 1)
-        self.assertIsNone(checkpoints[0]["best_fitness"])
-        self.assertEqual(result["tool_calls"], result["evaluations"] + 1)
+    def test_baseline_is_excluded_from_checkpoints_and_candidate_budget(self):
+        result, events, checkpoints = self.run_engine(self.config(checkpoint_interval=1, max_tool_calls=2))
+        self.assertEqual([p["tool_calls"] for p in checkpoints], [1, 2])
+        self.assertEqual([p["checkpoint_thresholds"] for p in checkpoints], [[1], [2]])
+        baseline, = (event for event in events if event["event"] == "baseline")
+        self.assertEqual(baseline["generation"], 0)
+        self.assertEqual(baseline["tool_calls"], 0)
+        self.assertEqual(baseline["evaluations"], 0)
+        self.assertEqual(baseline["baseline_tool_calls"], 1)
+        self.assertEqual(baseline["abc_process_invocations"], 1)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["tool_calls"], result["evaluations"])
+        self.assertEqual(result["abc_process_invocations"], result["tool_calls"] + 1)
 
     def test_pareto_retains_archive_without_scalar_selection(self):
         result, _, checkpoints = self.run_engine(self.config(optimization_mode="pareto"))
@@ -98,13 +103,13 @@ class ProgressTests(unittest.TestCase):
         with patch.object(e.random.Random, "randrange", return_value=0), \
              patch.object(e.abc, "evaluate_recipe", side_effect=self.evaluate):
             result = e.run("unused.aig", self.config(generations=2, crossover_rate=0,
-                           mutation_rate=0, max_tool_calls=3), progress=events.append)
+                           mutation_rate=0, max_tool_calls=1), progress=events.append)
         checkpoints = [p for p in events if p["event"] == "checkpoint"]
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["evaluations"], 1)
         self.assertEqual(result["cache_hits"], 5)
-        self.assertEqual(result["tool_calls"], 2)
-        self.assertEqual([p["checkpoint_thresholds"] for p in checkpoints], [[2], []])
+        self.assertEqual(result["tool_calls"], 1)
+        self.assertEqual([p["checkpoint_thresholds"] for p in checkpoints], [[]])
         self.assertEqual(checkpoints[-1]["cache_hits"], 5)
 
     def test_failure_does_not_count_success_or_invent_qor(self):
@@ -121,7 +126,7 @@ class ProgressTests(unittest.TestCase):
             result, events, checkpoints = self.run_engine(self.config(), evaluate)
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["evaluations"], 1)
-            self.assertEqual(result["tool_calls"], None if uncertain else 3)
+            self.assertEqual(result["tool_calls"], None if uncertain else 2)
             self.assertEqual(checkpoints[-1]["evaluations"], 1)
             self.assertEqual(checkpoints[-1]["best_fitness"], 0.5)
             self.assertEqual(events[-1]["evaluations"], result["evaluations"])

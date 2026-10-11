@@ -72,22 +72,24 @@ class WeightedSumTests(unittest.TestCase):
             self.assertEqual(survival.call_count, 2)
             self.assertTrue(all(c.kwargs["key"] is e.scalar_key for c in survival.call_args_list))
             self.assertEqual(result["pareto"], [])
-            self.assertEqual((result["tool_calls"], result["cache_hits"]), (3, 2))
+            self.assertEqual((result["tool_calls"], result["cache_hits"]), (2, 2))
 
-    def test_baseline_and_candidate_share_budget_and_options(self):
+    def test_baseline_has_separate_budget_and_shared_options(self):
         with patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator) as tool:
-            result = e.run("unused.aig", self.config(max_tool_calls=4, lut_k=5,
+            result = e.run("unused.aig", self.config(max_tool_calls=3, lut_k=5,
                            abc_binary="custom-abc", timeout=12))
         self.assertEqual(result["status"], "budget_exhausted")
         self.assertEqual(result["baseline_qor"], {"lut_count": 10, "lut_levels": 20})
         self.assertEqual(result["baseline_evaluations"], 1)
         self.assertEqual(result["successful_evaluations"], 3)
         self.assertEqual(result["candidate_attempts"], 4)
-        self.assertEqual(result["tool_calls"], 4)
+        self.assertEqual(result["tool_calls"], 3)
+        self.assertEqual(result["baseline_tool_calls"], 1)
         self.assertEqual(tool.call_args_list[0].args[1], [])
-        budget = tool.call_args_list[0].kwargs["budget"]
+        budget = tool.call_args_list[1].kwargs["budget"]
+        self.assertIsNot(tool.call_args_list[0].kwargs["budget"], budget)
+        self.assertTrue(all(call.kwargs["budget"] is budget for call in tool.call_args_list[1:]))
         for call in tool.call_args_list:
-            self.assertIs(call.kwargs["budget"], budget)
             self.assertEqual((call.kwargs["lut_k"], call.kwargs["abc_binary"], call.kwargs["timeout"]),
                              (5, "custom-abc", 12))
         for limit in (0, 1, 2):
@@ -95,23 +97,23 @@ class WeightedSumTests(unittest.TestCase):
                 result = e.run("unused.aig", self.config(max_tool_calls=limit))
             self.assertEqual(result["status"], "budget_exhausted")
             self.assertEqual(result["tool_calls"], limit)
-            self.assertEqual(tool.call_count, limit)
-            self.assertEqual(result["successful_evaluations"], max(0, limit-1))
-            if limit <= 1:
+            self.assertEqual(tool.call_count, limit + 1)
+            self.assertEqual(result["successful_evaluations"], limit)
+            if limit == 0:
                 self.assertIsNone(result["best"])
 
     def test_cache_is_free_after_baseline(self):
         events = []
         with patch.object(e.random.Random, "randrange", return_value=0), \
              patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator) as tool:
-            result = e.run("unused.aig", self.config(max_tool_calls=2, generations=3,
+            result = e.run("unused.aig", self.config(max_tool_calls=1, generations=3,
                            crossover_rate=0, mutation_rate=0), progress=events.append)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(tool.call_count, 2)
-        self.assertEqual(result["tool_calls"], 2)
+        self.assertEqual(result["tool_calls"], 1)
         self.assertEqual(result["cache_hits"], 7)
         self.assertEqual(result["candidate_attempts"], 8)
-        self.assertEqual(events[-1]["tool_calls"], 2)
+        self.assertEqual(events[-1]["tool_calls"], 1)
         self.assertEqual(events[-1]["cache_hits"], 7)
 
     def test_invalid_weights_and_modes_precede_abc(self):
@@ -144,7 +146,7 @@ class WeightedSumTests(unittest.TestCase):
                 result = e.run("unused.aig", self.config())
             self.assertEqual(result["status"], "failed")
             self.assertIn("must be positive", result["failure"]["message"])
-            self.assertEqual(result["tool_calls"], 1)
+            self.assertEqual(result["tool_calls"], 0)
             self.assertEqual(result["candidate_attempts"], 0)
             self.assertIsNone(result["weighted_fitness"])
             tool.assert_called_once()
@@ -165,7 +167,8 @@ class WeightedSumTests(unittest.TestCase):
                 result = e.run(circuit, self.config(timeout=0.01), progress=events.append)
             self.assertEqual(result["status"], "failed")
             self.assertIn("timed out", result["failure"]["message"])
-            self.assertEqual(result["tool_calls"], 1 if fail_baseline else 2)
+            self.assertEqual(result["tool_calls"], 0 if fail_baseline else 1)
+            self.assertEqual(result["baseline_tool_calls"], 1)
             self.assertEqual(events[-1]["tool_calls"], result["tool_calls"])
             self.assertIsNone(result["best"])
 
@@ -183,7 +186,7 @@ class WeightedSumTests(unittest.TestCase):
             path.write_text(json.dumps(asdict(self.config(optimization_mode="pareto", generations=0,
                                                          max_tool_calls=3, weight_area=0.9, weight_delay=0.1))))
             for mode, extra, calls in (("pareto", [], 2),
-                                       ("weighted_sum", ["--optimization-mode", "weighted_sum"], 3)):
+                                       ("weighted_sum", ["--optimization-mode", "weighted_sum"], 2)):
                 process = subprocess.run([
                     sys.executable, str(ROOT / "run.py"), "--algorithm", "nsga2",
                     "--circuit", str(ROOT / "benchmarks/converted/iscas85/c17.aig"),
@@ -250,14 +253,14 @@ class WeightedSumTests(unittest.TestCase):
                                           if "generation 0/2:" in line)
                         self.assertIn(f"LUTs={baseline[0]} levels={baseline[1]}", baseline_line)
                         self.assertNotIn("fitness=", baseline_line)
-                        self.assertIn("ABC calls=1/4", baseline_line)
+                        self.assertIn("ABC calls=0/4", baseline_line)
                         self.assertIn("original circuit", baseline_line)
                     else:
                         self.assertNotIn("generation 0/", process.stdout)
                     if mode == "weighted_sum":
-                        self.assertEqual(result["status"], "budget_exhausted")
+                        self.assertEqual(result["status"], "completed")
                         self.assertEqual(tuple(result["baseline_qor"].values()), baseline)
-                        self.assertEqual((result["baseline_evaluations"], result["successful_evaluations"]), (1, 3))
+                        self.assertEqual((result["baseline_evaluations"], result["successful_evaluations"]), (1, 4))
                         expected = e.weighted_fitness((result["best"]["lut_count"], result["best"]["lut_levels"]),
                                                      result["baseline_qor"], self.config(weight_area=0.8, weight_delay=0.2))
                         self.assertAlmostEqual(result["weighted_fitness"], expected)

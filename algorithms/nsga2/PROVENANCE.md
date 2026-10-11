@@ -40,8 +40,8 @@ not be described as a reproduction of BOiLS's exact operators or experiments.
 
 Import the shared 16 actions directly; replace the example's evaluator and
 reporting policies, and remove its repeated-run driver.
-Every cache miss calls `common.abc.evaluate_recipe` with the same `ActionBudget`
-object. No persistent cache, prefix evaluation, parallelism, or budget reset.
+Every candidate cache miss calls `common.abc.evaluate_recipe` with the same
+`ActionBudget` object. No persistent cache, prefix evaluation, parallelism, or budget reset.
 Check one sequence invocation before ABC; stop at the first unaffordable
 cache miss without truncating it.
 In Pareto mode, already evaluated offspring remain in the archive if a
@@ -81,13 +81,16 @@ Weights default to 0.5/0.5 in both modes and must be finite, nonnegative and sum
 to one within absolute tolerance 1e-9; they are validated before ABC launches.
 
 Weighted mode first evaluates the original circuit with an empty recipe, using
-the same run-wide `ActionBudget`, ABC binary, LUT K and timeout as candidates.
-Both measured baseline metrics must be positive. This invocation costs one
-tool call, including failure or timeout; a failed baseline aborts the search.
+a separate one-invocation `ActionBudget` with the same ABC binary, LUT K and
+timeout as candidates. Both measured baseline metrics must be positive. Its
+invocation is recorded as `baseline_tool_calls`, excluded from candidate
+`tool_calls` and the configured budget, including failures and timeouts.
+A failed baseline still aborts the search. Generation 0 displays zero candidate
+calls, including when `max_tool_calls` is zero.
 The baseline is a normalization reference, not a search candidate. Cache hits
 remain free. Default candidate proposals can number 40 + 40 * 99 = 4000, but
-only 3999 candidate invocations fit the 4000-call budget after the baseline
-if all recipes are unique, regardless of recipe length.
+all 4000 candidate invocations fit the 4000-call budget if recipes are unique,
+regardless of recipe length. Initialization candidates remain budgeted.
 The first unaffordable candidate attempt is recorded and stops the run with
 `budget_exhausted`; the budget and generation convention are never increased.
 
@@ -160,7 +163,8 @@ and archive if available; insufficient budget for one recipe writes no CSV.
 Any evaluation failure aborts the run, retains diagnostics and partial archive,
 and writes no successful CSV even if earlier candidates succeeded. Uncertain
 invocation counts remain JSON null and stop the run. Each launched sequence costs
-one tool call, including an empty baseline, failure or timeout. Recipe length and
+one tool call for a candidate, including failure or timeout. The empty baseline
+is counted separately and excluded from the candidate budget. Recipe length and
 bundled commands do not affect the budget. Action completions are diagnostics.
 
 Python `Config` defaults are seed 0, population 40, offspring 40, 99 offspring generations,

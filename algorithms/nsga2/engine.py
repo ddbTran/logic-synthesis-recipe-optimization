@@ -198,6 +198,7 @@ def fingerprint(path):
 def run(circuit, config, *, progress=None):
     started = time.perf_counter()
     budget = abc.ActionBudget(config.max_tool_calls)
+    baseline_budget = abc.ActionBudget(1)
     rng = random.Random(config.seed)
     cache = {}
     archive = {}
@@ -230,7 +231,9 @@ def run(circuit, config, *, progress=None):
                 "best": solution(best) if best else None,
                 **({"pareto_size": len(archive)} if not weighted else {}),
                 "evaluations": evaluations, "baseline_evaluations": baseline_evaluations,
-                "abc_process_invocations": budget.abc_process_invocations,
+                "abc_process_invocations": (budget.abc_process_invocations
+                                            + baseline_budget.abc_process_invocations),
+                "baseline_tool_calls": baseline_budget.tool_calls,
                 "best_fitness": scalar_best.weighted_fitness if scalar_best else None,
                 "best_lut_count": scalar_best.objectives[0] if scalar_best else None,
                 "best_lut_levels": scalar_best.objectives[1] if scalar_best else None,
@@ -297,9 +300,8 @@ def run(circuit, config, *, progress=None):
     try:
         if weighted:
             # The original circuit is a normalization reference, not a candidate.
-            budget.check()
             baseline_result = abc.evaluate_recipe(
-                circuit, [], budget=budget, metric="lut", lut_k=config.lut_k,
+                circuit, [], budget=baseline_budget, metric="lut", lut_k=config.lut_k,
                 timeout=config.timeout, abc_binary=config.abc_binary)
             baseline_evaluations = 1
             baseline = baseline_result["metrics"]
@@ -360,7 +362,9 @@ def run(circuit, config, *, progress=None):
         "weighted_fitness": best.weighted_fitness if best else None,
         "best": solution(best) if best else None,
         "pareto": [solution(p) for p in ordered],
-        "tool_calls": budget.tool_calls, "abc_process_invocations": budget.abc_process_invocations,
+        "tool_calls": budget.tool_calls, "baseline_tool_calls": baseline_budget.tool_calls,
+        "abc_process_invocations": (budget.abc_process_invocations
+                                    + baseline_budget.abc_process_invocations),
         "runtime_seconds": time.perf_counter() - started,
         "evaluations": evaluations, "successful_evaluations": evaluations, "cache_hits": cache_hits,
         "best_fitness": scalar_best.weighted_fitness if scalar_best else None,

@@ -46,7 +46,9 @@ appropriate default without changing the core search algorithm.
 
 One tool call is one launched ABC sequence (full recipe evaluation), regardless
 of recipe length or how many commands an action contains. An empty-recipe
-baseline also costs one call. A cache hit launches no ABC and costs zero.
+baseline is one ABC invocation, but the runner accounts for it separately and
+excludes it from the candidate `tool_calls` budget. A cache hit launches no ABC
+and costs zero.
 Replaying L prefixes in separate evaluations costs L calls. Loading, `strash`,
 transformations, mapping and statistics all share the same sequence invocation.
 Action completion counts are diagnostics, not budget charges.
@@ -206,7 +208,7 @@ Every `checkpoint` includes these fields (also present on other engine events):
 | --- | --- |
 | `event` | `"checkpoint"` |
 | `evaluations` | Integer count of successful, non-cached candidate recipe evaluations |
-| `tool_calls` | Cumulative launched ABC sequences; integer, or null on uncertain launches |
+| `tool_calls` | Cumulative launched candidate sequences, excluding generation 0; integer, or null on uncertain launches |
 | `elapsed_seconds` | Cumulative wall-clock runtime in seconds |
 | `best_fitness` | Lowest measured candidate weighted fitness so far, or null |
 | `best_lut_count`, `best_lut_levels` | QoR of that same scalar winner, or null |
@@ -214,8 +216,12 @@ Every `checkpoint` includes these fields (also present on other engine events):
 Weighted fitness is `weight_area * LUTs / baseline_LUTs + weight_delay * levels /
 baseline_levels` (lower is better). The original circuit's empty-recipe baseline
 is a normalization reference, excluded from `evaluations` and counted separately
-as `baseline_evaluations`. Its empty recipe costs one `tool_calls` and one
-`abc_process_invocations` when launched, including failure or timeout.
+as `baseline_evaluations`. Its invocation is tracked as `baseline_tool_calls`
+and excluded from candidate `tool_calls` and `max_tool_calls`, including failure
+or timeout. Generation 0 therefore displays `ABC calls=0/<budget>`.
+`abc_process_invocations` includes both baseline and candidate launches. The
+baseline is measured even with a zero candidate budget; baseline failure still
+aborts the run. Initial candidate population evaluations remain budgeted.
 Cache hits, failed evaluations and unevaluated proposals never increment
 `evaluations`. `candidate_attempts` includes cache hits and a budget-rejected
 candidate; `cache_hits` and process invocations are separate counters.
@@ -248,7 +254,8 @@ representative, not a scalar convergence criterion. Compare archives with an
 explicit multi-objective metric rather than treating this representative as a
 scalar optimum.
 
-Sequence-call accounting preserves the original evaluator budget semantics.
+Sequence-call accounting uses one invocation per sequence. The runner excludes
+the generation-0 measurement from the candidate budget.
 Commands, LUT mapping, fitness and search operators are unchanged. The earlier
 action-counting revision used a different budget unit; do not mix its results
 with sequence-based curves. `checkpoint_interval` is recorded in
