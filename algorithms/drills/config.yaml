@@ -1,6 +1,6 @@
 {
-  "recipe_length": 50,
-  "episodes": 100,
+  "recipe_length": 20,
+  "episodes": 200,
   "seed": 0,
   "max_tool_calls": 4000,
   "checkpoint_interval": 200,

@@ -23,8 +23,8 @@ SOURCE_REVISION = "c8350ce3ac4198733b523cb52d5ba79aec0ed8aa"
 
 @dataclass(frozen=True)
 class Config(EvaluationConfig):
-    recipe_length: int = 50
-    episodes: int = 100
+    recipe_length: int = 20
+    episodes: int = 200
     gamma: float = 0.99
     actor_learning_rate: float = 0.01
     critic_learning_rate: float = 0.01

@@ -263,8 +263,10 @@ The root requirements file is authoritative; the algorithm requirements file
 delegates to it. `.venv/` is ignored. Keep an existing Python 3.11 environment;
 check its version before replacing any environment. Configuration files use the
 existing JSON subset of YAML. Defaults retain a 9→20→20→16 softmax actor,
-9→10→1 critic, gamma 0.99, Adam learning rates 0.01, 100 episodes and recipe
-length 50. Each position is one shared action; ordering and repeats are preserved.
+9→10→1 critic, gamma 0.99, Adam learning rates 0.01, 200 episodes and recipe
+length 20. This allows 4,000 candidate evaluations before cache hits; cache hits
+can reduce actual tool calls. The fixed baseline is counted separately.
+Each position is one shared action; ordering and repeats are preserved.
 Training performs one combined actor/critic optimizer update per complete episode.
 
 Use `--device cpu`, `--device cuda`, or `--device auto` (default; CUDA when
