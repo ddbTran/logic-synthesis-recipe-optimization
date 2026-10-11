@@ -215,7 +215,7 @@ def run(circuit, config, *, progress=None):
         best=env.best if status != "failed" else None,
         weighted_fitness=env.best["weighted_fitness"] if env.best and status != "failed" else None,
         provenance={
-            "variant": "drills-source-a2c-weighted-improvement-v1", "source_revision": SOURCE_REVISION,
+            "variant": "drills-elementwise-a2c-weighted-improvement-v2", "source_revision": SOURCE_REVISION,
             "source_repository": "https://github.com/scale-lab/DRiLLS", "python": platform.python_version(),
             "torch": model.torch.__version__, "numpy": model.np.__version__,
             "requested_device": config.device, "resolved_device": str(agent.device) if agent else None,
@@ -224,7 +224,7 @@ def run(circuit, config, *, progress=None):
             "architecture": {"actor": [9, *config.actor_hidden, len(TRANSFORMS)],
                              "critic": [9, *config.critic_hidden, 1]},
             "feature_names": FEATURE_NAMES, "feature_normalization": "episode-reset Welford; variance clamp [0.01, 1e9]",
-            "loss_semantics": "literal source [T,T] broadcast; summed losses; actor gradients into critic",
+            "loss_semantics": "elementwise [T] advantages; summed losses; actor advantage detached",
             "partial_episode_policy": "skip training; preserve valid evaluations", "resume_supported": False,
             "action_pool": TRANSFORMS, "circuit_sha256": fingerprint(circuit),
             "abc_executable": abc_identity["resolved"], "abc_sha256": abc_identity["sha256"],

@@ -246,7 +246,7 @@ The [PyTorch A2C implementation](algorithms/drills/engine.py) adapts
 Hashemi, Shalan and Reda (ASP-DAC 2020), under the retained
 [BSD-3-Clause license](algorithms/drills/LICENSE). See
 [provenance and deviations](algorithms/drills/PROVENANCE.md) for the source
-comparison, literal loss semantics and finite-return convention.
+comparison, corrected elementwise A2C loss semantics and finite-return convention.
 
 ```bash
 # Requested default run: up to 4,000 candidate calls; not a smoke test.

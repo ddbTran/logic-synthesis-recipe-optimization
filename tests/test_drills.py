@@ -1,4 +1,4 @@
-"""Sequential DRiLLS contracts, literal upstream A2C math and real tool smoke tests."""
+"""Sequential DRiLLS contracts, corrected A2C math and real tool smoke tests."""
 
 from dataclasses import asdict, replace
 import csv
@@ -113,21 +113,34 @@ class ModelTests(unittest.TestCase):
         finally:
             m.seed_all(0)
 
-    def test_literal_loss_and_gradients(self):
+    def test_elementwise_loss_and_detached_actor_advantage(self):
         torch = m.torch
         probabilities = torch.tensor([[0.25, 0.75], [0.6, 0.4]], requires_grad=True)
         values = torch.tensor([[0.2], [0.7]], requires_grad=True)
         returns = torch.tensor([1., -1.])
         total, actor, critic, advantage = m.losses(probabilities, values, torch.tensor([0, 1]), returns)
-        self.assertEqual(tuple(advantage.shape), (2, 2))
-        expected_actor = sum(-torch.log(probabilities[j, [0, 1][j]]) * (returns[j] - values[i, 0])
-                             for i in range(2) for j in range(2))
+        self.assertEqual(tuple(advantage.shape), (2,))
+        torch.testing.assert_close(advantage, torch.tensor([0.8, -1.7]))
+        expected_actor = -torch.log(torch.tensor(0.25)) * 0.8 - torch.log(torch.tensor(0.4)) * -1.7
         self.assertAlmostEqual(actor.item(), expected_actor.item(), places=6)
-        self.assertAlmostEqual(critic.item(), sum((r-v)**2 for v in (0.2, 0.7) for r in (1, -1)), places=6)
+        self.assertAlmostEqual(critic.item(), 0.8**2 + (-1.7)**2, places=6)
+        self.assertAlmostEqual(total.item(), actor.item() + critic.item(), places=6)
         actor.backward(retain_graph=True)
-        self.assertGreater(values.grad.abs().sum().item(), 0)  # Source does not detach critic.
+        self.assertIsNone(values.grad)
+        torch.testing.assert_close(probabilities.grad, torch.tensor([[-3.2, 0.], [0., 4.25]]))
+        probabilities.grad = None
         total.backward()
-        self.assertTrue(torch.isfinite(probabilities.grad).all())
+        torch.testing.assert_close(values.grad, torch.tensor([[-1.6], [3.4]]))
+        torch.testing.assert_close(probabilities.grad, torch.tensor([[-3.2, 0.], [0., 4.25]]))
+
+    def test_single_timestep_advantage_keeps_batch_dimension(self):
+        torch = m.torch
+        probabilities = torch.tensor([[0.25, 0.75]], requires_grad=True)
+        values = torch.tensor([[0.2]], requires_grad=True)
+        total, _, _, advantage = m.losses(probabilities, values, torch.tensor([0]), torch.tensor([1.]))
+        self.assertEqual(tuple(advantage.shape), (1,))
+        total.backward()
+        torch.testing.assert_close(values.grad, torch.tensor([[-1.6]]))
 
     def test_returns_forward_sampling_and_optimizer_update(self):
         m.np.testing.assert_allclose(m.discounted_returns([1., 2., 3.], 0.5), [2.75, 3.5, 3])

@@ -21,9 +21,13 @@ and population-standard-deviation normalization.
 The source subtracts a `[T,1]` critic from `[T]` returns, yielding `[T,T]`
 advantages. Both losses are sums; the actor uses negative log action probability
 times advantage, and the critic uses squared advantage. No stop-gradient is
-present. This port preserves that broadcasting and actor-to-critic gradient
-coupling, rather than silently substituting conventional detached elementwise
-advantages. The source's unused policy-gradient expression adds no loss here.
+present. This port now deliberately corrects those two behaviors: squeezing the
+critic output produces one `[T]` advantage per timestep, and the actor loss uses
+a detached advantage. Only the critic loss updates critic parameters. Losses
+remain summed, with one combined Adam step per complete episode. Results use
+variant `drills-elementwise-a2c-weighted-improvement-v2`; learning curves and loss
+scales differ from the previous literal-source port. The source's unused
+policy-gradient expression adds no loss here.
 
 Observations, in order: input pins, output pins, Yosys cells, ABC edges,
 ABC levels, latches, AND/cell, OR/cell, NOT/cell. Raw statistics come from a

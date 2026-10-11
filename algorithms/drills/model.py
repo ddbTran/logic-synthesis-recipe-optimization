@@ -1,4 +1,4 @@
-"""PyTorch port of DRiLLS model.py, including its literal loss broadcasting.
+"""PyTorch port of DRiLLS model.py with corrected elementwise A2C losses.
 
 Copyright (c) 2019, SCALE Lab, Brown University. All rights reserved.
 Adapted under BSD-3-Clause; see LICENSE and PROVENANCE.md.
@@ -86,10 +86,10 @@ def networks(actor_hidden, critic_hidden):
 
 
 def losses(probabilities, values, actions, returns):
-    # Literal TF shapes: [T] - [T,1] = [T,T]. No stop_gradient in the source.
-    advantage = returns - values
+    # One advantage per timestep; actor treats the critic estimate as fixed.
+    advantage = returns - values.squeeze(-1)
     neg_log_prob = -torch.log(probabilities.gather(1, actions[:, None]).squeeze(1))
-    actor = (neg_log_prob * advantage).sum()
+    actor = (neg_log_prob * advantage.detach()).sum()
     critic = advantage.square().sum()
     total = actor + critic
     return total, actor, critic, advantage

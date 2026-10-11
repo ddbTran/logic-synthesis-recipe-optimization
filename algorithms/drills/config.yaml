@@ -16,7 +16,7 @@
   "weight_delay": 0.5,
   "abc_binary": "yosys-abc",
   "yosys_binary": "yosys",
-  "timeout": 60,
+  "timeout": null,
   "device": "auto",
   "deterministic": false
 }
