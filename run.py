@@ -14,7 +14,7 @@ def main():
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
     parser.add_argument("--seed", type=int, help="Random seed (NSGA-II default: 0)")
-    parser.add_argument("--max-tool-calls", type=int, help="Action budget override; BOiLS requires an explicit budget")
+    parser.add_argument("--max-tool-calls", type=int, help="ABC evaluation invocation budget override; BOiLS requires an explicit budget")
     parser.add_argument("--config", help="NSGA-II JSON-subset YAML configuration")
     for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k"):
         parser.add_argument("--" + name, type=int)
@@ -39,9 +39,16 @@ def main():
                 config = replace(config, timeout=args.timeout)
         except (OSError, ValueError, TypeError) as exc:
             parser.error(str(exc))
-        result = run(args.circuit, config)
-        directory = write_results(result)
-        print(f"nsga2: {result['status']}; tool_calls={result['tool_calls']}; results={directory}")
+        from pathlib import Path
+        import tempfile
+        from common.progress import ProgressLogger
+
+        Path("results").mkdir(exist_ok=True)
+        directory = Path(tempfile.mkdtemp(prefix="nsga2-", dir="results"))
+        with ProgressLogger(directory / "progress.jsonl") as progress:
+            result = run(args.circuit, config, progress=progress)
+        write_results(result, directory=directory)
+        print(f"nsga2: {result['status']}; tool_calls={result['tool_calls']}; results={directory}", flush=True)
         if result["failure"]:
             print(result["failure"]["message"], file=sys.stderr)
         return 0 if result["status"] != "failed" and result["best"] is not None else 1

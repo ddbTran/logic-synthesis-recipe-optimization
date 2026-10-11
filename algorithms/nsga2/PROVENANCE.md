@@ -39,10 +39,10 @@ not be described as a reproduction of BOiLS's exact operators or experiments.
 ## Adaptations for this benchmark
 
 Import the shared 16 actions directly; remove the example's evaluator, baseline
-normalization, weighted reporting score, repeated-run driver and progress logs.
+normalization, weighted reporting score and repeated-run driver.
 Every cache miss calls `common.abc.evaluate_recipe` with the same `ActionBudget`
 object. No persistent cache, prefix evaluation, parallelism, or budget reset.
-Check a full recipe before ABC; stop at the first unaffordable cache miss.
+Check one invocation before ABC; stop at the first unaffordable cache miss.
 Already evaluated offspring remain in the archive if a generation stops early.
 Generation count means offspring generations **after** initialization; offspring
 count is configurable independently of population size, including odd counts.
@@ -59,7 +59,15 @@ Ordinary budget exhaustion is a labeled partial run, with genuine measured best
 and archive if available; insufficient budget for one recipe writes no CSV.
 Any evaluation failure aborts the run, retains diagnostics and partial archive,
 and writes no successful CSV even if earlier candidates succeeded. Uncertain
-action counts remain JSON null. The evaluator alone determines executed actions.
+invocation counts remain JSON null and stop the run. A launched evaluation costs
+one tool call, including failures; recipe length and bundled commands do not
+affect the budget. Action completions are separate diagnostics.
+
+Defaults are seed 0, population 40, offspring 40, 99 offspring generations,
+recipe length 20, budget 4000, and 6-LUT mapping. Initialization plus offspring
+allows 40 + 40 * 99 = 4000 evaluation attempts; cache hits launch no ABC and do
+not consume calls. The runner streams flushed terminal and `progress.jsonl`
+events for configuration, best improvements, generations and final status.
 
 Configuration is JSON syntax (a YAML subset), loaded with Python's standard
 `json` module; general YAML syntax is intentionally unsupported. Fixed seed,

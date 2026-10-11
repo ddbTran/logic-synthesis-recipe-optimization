@@ -1,4 +1,4 @@
-"""Shared action indices and default RL/metaheuristic action budget."""
+"""Shared action indices and default ABC evaluation invocation budget."""
 
 TRANSFORMS = [
     # Rewrite

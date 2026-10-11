@@ -27,9 +27,9 @@ EXAMPLE_SHA256 = "b1a33ad832d067f8b21927980e1518ccdbad6d85840e7f376ad1b89346e797
 class Config:
     seed: int = 0
     recipe_length: int = 20
-    population_size: int = 30
-    offspring_count: int = 30
-    generations: int = 50
+    population_size: int = 40
+    offspring_count: int = 40
+    generations: int = 99
     crossover_rate: float = 0.9
     mutation_rate: float = 0.05
     lut_k: int = 6
@@ -164,7 +164,7 @@ def fingerprint(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def run(circuit, config):
+def run(circuit, config, *, progress=None):
     started = time.perf_counter()
     budget = abc.ActionBudget(config.max_tool_calls)
     rng = random.Random(config.seed)
@@ -174,12 +174,32 @@ def run(circuit, config):
     status = "completed"
     failure = None
 
+    def emit(event, generation, event_status="running"):
+        if progress is not None:
+            ordered = sorted(archive.values(), key=lambda p: (*p.objectives, p.recipe))
+            calls = budget.tool_calls
+            progress({
+                "event": event, "generation": generation, "generations": config.generations,
+                "best": solution(ordered[0]) if ordered else None,
+                "pareto_size": len(archive), "tool_calls": calls,
+                "max_tool_calls": config.max_tool_calls,
+                "budget_utilization_percent": (100 * calls / config.max_tool_calls
+                                               if calls is not None and config.max_tool_calls else
+                                               0 if calls == 0 else None),
+                "cache_hits": cache_hits, "elapsed_seconds": time.perf_counter() - started,
+                "status": event_status,
+                **({"config": asdict(config)} if event == "configuration" else {}),
+            })
+
+    generation = 0
+    emit("configuration", generation)
+
     def evaluate(recipe):
         nonlocal evaluations, cache_hits
         if recipe in cache:
             cache_hits += 1
             return Individual(recipe, cache[recipe])
-        budget.check(len(recipe))
+        budget.check()
         result = abc.evaluate_recipe(circuit, recipe, budget=budget, metric="lut",
                                      lut_k=config.lut_k, timeout=config.timeout,
                                      abc_binary=config.abc_binary)
@@ -190,11 +210,14 @@ def run(circuit, config):
         objectives = (metrics["lut_count"], metrics["lut_levels"])
         cache[recipe] = objectives
         member = Individual(recipe, objectives)
+        previous_best = min(((*p.objectives, p.recipe) for p in archive.values()), default=None)
         if not any(dominates(p.objectives, objectives) for p in archive.values()):
             for old in list(archive):
                 if dominates(objectives, archive[old].objectives):
                     del archive[old]
             archive[recipe] = member
+        if previous_best is None or (*objectives, recipe) < previous_best:
+            emit("improvement", generation)
         return member
 
     try:
@@ -202,7 +225,8 @@ def run(circuit, config):
                                      for _ in range(config.recipe_length)))
                       for _ in range(config.population_size)]
         population = select_survivors(population, config.population_size)
-        for _ in range(config.generations):
+        emit("generation", 0)
+        for generation in range(1, config.generations + 1):
             offspring = []
             while len(offspring) < config.offspring_count:
                 a, b = tournament(population, rng), tournament(population, rng)
@@ -212,6 +236,7 @@ def run(circuit, config):
                     offspring.append(evaluate(recipe))
             population = select_survivors(population + offspring, config.population_size)
             completed_generations += 1
+            emit("generation", generation)
     except abc.BudgetExceeded as exc:
         if budget.tool_calls is None:
             status, failure = "failed", {"type": type(exc).__name__, "message": str(exc)}
@@ -223,6 +248,7 @@ def run(circuit, config):
                    "abc_output": getattr(exc, "output", ""),
                    "completed_actions_lower_bound": getattr(exc, "completed_actions", 0)}
     ordered = sorted(archive.values(), key=lambda p: (*p.objectives, p.recipe))
+    emit("summary", generation, status)
     executable = shutil.which(config.abc_binary)
     provenance = {
         "variant": VARIANT, "source_example_sha256": EXAMPLE_SHA256,
@@ -246,11 +272,11 @@ def run(circuit, config):
     }
 
 
-def write_results(result, root="results"):
+def write_results(result, root="results", *, directory=None):
     """Unique run directory prevents stale success rows after a failed rerun."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix="nsga2-", dir=root))
+    directory = Path(directory) if directory is not None else Path(tempfile.mkdtemp(prefix="nsga2-", dir=root))
     (directory / "result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     (directory / "pareto.json").write_text(json.dumps(result["pareto"], sort_keys=True) + "\n")
     if result["status"] != "failed" and result["best"] is not None and result["tool_calls"] is not None:

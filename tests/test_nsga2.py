@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from algorithms.nsga2 import engine as e
 from common import abc
 from common.actions import TRANSFORMS
+from common.progress import ProgressLogger
 
 
 class NSGA2Tests(unittest.TestCase):
@@ -22,8 +23,8 @@ class NSGA2Tests(unittest.TestCase):
         return e.Individual((index,), values)
 
     def fake_evaluator(self, circuit, recipe, *, budget, **kwargs):
-        budget.check(len(recipe))
-        budget.tool_calls += len(recipe)
+        budget.check()
+        budget.tool_calls += 1
         return {"metrics": {"lut_count": sum(recipe), "lut_levels": 100 - sum(recipe)}}
 
     def config(self, **overrides):
@@ -84,31 +85,37 @@ class NSGA2Tests(unittest.TestCase):
             seen.append(kwargs["budget"])
             return self.fake_evaluator(*args, **kwargs)
         with patch.object(abc, "evaluate_recipe", side_effect=evaluate) as tool:
-            result = e.run("unused.aig", self.config(max_tool_calls=8))
+            result = e.run("unused.aig", self.config(max_tool_calls=2))
         self.assertEqual(result["status"], "budget_exhausted")
-        self.assertEqual(result["tool_calls"], 6)
+        self.assertEqual(result["tool_calls"], 2)
         self.assertEqual(tool.call_count, 2)
         self.assertTrue(all(b is seen[0] for b in seen))
         self.assertIsNotNone(result["best"])
-        with patch.object(abc, "evaluate_recipe") as tool:
-            result = e.run("unused.aig", self.config(max_tool_calls=2))
-        tool.assert_not_called()
-        self.assertIsNone(result["best"])
-        self.assertEqual(result["tool_calls"], 0)
+        with patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator) as tool:
+            result = e.run("unused.aig", self.config(max_tool_calls=1))
+        self.assertEqual(tool.call_count, 1)
+        self.assertIsNotNone(result["best"])
+        self.assertEqual(result["tool_calls"], 1)
+        self.assertEqual(result["status"], "budget_exhausted")
 
     def test_repeated_recipe_real_cache_hit(self):
+        events = []
         with patch.object(e.random.Random, "randrange", return_value=0), \
              patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator) as tool:
-            result = e.run("unused.aig", self.config(crossover_rate=0, mutation_rate=0, max_tool_calls=3))
+            result = e.run("unused.aig", self.config(crossover_rate=0, mutation_rate=0, max_tool_calls=1),
+                           progress=events.append)
         self.assertEqual(tool.call_count, 1)
-        self.assertEqual(result["tool_calls"], 3)
+        self.assertEqual(result["tool_calls"], 1)
         self.assertEqual(result["best"]["recipe"], [0, 0, 0])
         self.assertEqual(result["cache_hits"], 12)
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(events[-1]["cache_hits"], 12)
+        self.assertEqual(events[-1]["tool_calls"], 1)
 
     def test_failures_abort_and_preserve_diagnostics(self):
         for uncertain in (False, True):
             count = 0
+            events = []
             def evaluate(*args, **kwargs):
                 nonlocal count
                 count += 1
@@ -116,14 +123,18 @@ class NSGA2Tests(unittest.TestCase):
                     return self.fake_evaluator(*args, **kwargs)
                 if uncertain:
                     kwargs["budget"].tool_calls = None
+                else:
+                    kwargs["budget"].tool_calls += 1
                 raise abc.ABCError("timeout or malformed metrics", "raw failure", 1)
             with patch.object(abc, "evaluate_recipe", side_effect=evaluate):
-                result = e.run("unused.aig", self.config())
+                result = e.run("unused.aig", self.config(), progress=events.append)
             self.assertEqual(count, 2)
             self.assertEqual(result["status"], "failed")
             self.assertIsNone(result["best"])
             self.assertEqual(result["failure"]["abc_output"], "raw failure")
-            self.assertEqual(result["tool_calls"], None if uncertain else 3)
+            self.assertEqual(result["tool_calls"], None if uncertain else 2)
+            self.assertEqual(events[-1]["status"], "failed")
+            self.assertEqual(events[-1]["tool_calls"], result["tool_calls"])
             with tempfile.TemporaryDirectory() as directory:
                 output = e.write_results(result, directory)
                 self.assertFalse((output / "best.csv").exists())
@@ -148,11 +159,75 @@ class NSGA2Tests(unittest.TestCase):
 
     def test_configuration(self):
         self.assertEqual(asdict(e.load_config()), asdict(e.Config()))
+        config = e.load_config()
+        self.assertEqual((config.seed, config.population_size, config.offspring_count,
+                          config.generations, config.recipe_length, config.max_tool_calls,
+                          config.lut_k), (0, 40, 40, 99, 20, 4000, 6))
+        self.assertEqual(config.population_size + config.offspring_count * config.generations, 4000)
         for values in ({"population_size": 1}, {"recipe_length": 0}, {"generations": -1},
                        {"offspring_count": 0}, {"timeout": float("nan")},
                        {"mutation_rate": 2}, {"objective": "weighted_sum"}, {"max_tool_calls": -1}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 self.config(**values)
+
+    def test_progress_streaming_and_final_counters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress.jsonl"
+            events = []
+            with ProgressLogger(path) as logger, patch("builtins.print") as terminal:
+                def progress(event):
+                    logger(event)
+                    # Read before closing the logger: every JSONL event was flushed.
+                    self.assertEqual(json.loads(path.read_text().splitlines()[-1]), event)
+                    events.append(event)
+                with patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator):
+                    result = e.run("unused.aig", self.config(), progress=progress)
+                self.assertTrue(all(call.kwargs.get("flush") for call in terminal.call_args_list))
+            self.assertEqual(events[0]["event"], "configuration")
+            self.assertEqual(events[0]["config"], result["config"])
+            self.assertEqual([p["generation"] for p in events if p["event"] == "generation"], [0, 1, 2, 3])
+            self.assertEqual(events[1]["event"], "improvement")
+            self.assertEqual(events[1]["tool_calls"], 1)
+            for event in events:
+                self.assertEqual(event["budget_utilization_percent"], event["tool_calls"])
+                self.assertGreaterEqual(event["elapsed_seconds"], 0)
+                self.assertEqual(event["generations"], 3)
+            final = events[-1]
+            self.assertEqual(final["event"], "summary")
+            for key in ("tool_calls", "cache_hits", "status", "best"):
+                self.assertEqual(final[key], result[key])
+            self.assertEqual(final["pareto_size"], len(result["pareto"]))
+            self.assertEqual(result["tool_calls"], result["successful_evaluations"])
+
+    def test_real_cli_overrides_determinism_and_progress(self):
+        runner = Path(e.__file__).resolve().parents[2] / "run.py"
+        circuit = runner.parent / "benchmarks/converted/iscas85/c17.aig"
+        results = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as directory:
+                process = subprocess.run(
+                    [sys.executable, str(runner), "--algorithm", "nsga2", "--circuit", str(circuit),
+                     "--seed", "7", "--recipe-length", "20", "--population-size", "2",
+                     "--offspring-count", "2", "--generations", "1", "--max-tool-calls", "4",
+                     "--lut-k", "6", "--crossover-rate", "0.8", "--mutation-rate", "1",
+                     "--timeout", "none"], cwd=directory, capture_output=True, text=True)
+                self.assertEqual(process.returncode, 0, process.stderr)
+                result_path, = Path(directory).glob("results/nsga2-*/result.json")
+                result = json.loads(result_path.read_text())
+                results.append(result)
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["tool_calls"], 4)
+                self.assertEqual(result["config"], asdict(e.Config(
+                    seed=7, population_size=2, offspring_count=2, generations=1,
+                    max_tool_calls=4, crossover_rate=0.8, mutation_rate=1, timeout=None)))
+                events = [json.loads(line) for line in (result_path.parent / "progress.jsonl").read_text().splitlines()]
+                self.assertEqual(events[-1]["tool_calls"], result["tool_calls"])
+                self.assertEqual(events[-1]["budget_utilization_percent"], 100)
+                self.assertEqual(events[-1]["best"], result["best"])
+                self.assertIn("ABC calls=4/4 (100.00%)", process.stdout)
+                self.assertIn("generation 1/1", process.stdout)
+        for key in ("best", "pareto", "tool_calls", "cache_hits"):
+            self.assertEqual(results[0][key], results[1][key])
 
     def test_cli_failure_and_no_affordable_candidate(self):
         runner = Path(e.__file__).resolve().parents[2] / "run.py"
@@ -169,6 +244,9 @@ class NSGA2Tests(unittest.TestCase):
                 result = json.loads(result_path.read_text())
                 self.assertEqual(result["status"], status)
                 self.assertEqual(result["tool_calls"], 0)
+                events = [json.loads(line) for line in (result_path.parent / "progress.jsonl").read_text().splitlines()]
+                self.assertEqual(events[-1]["status"], status)
+                self.assertEqual(events[-1]["tool_calls"], result["tool_calls"])
                 self.assertIsNone(result["best"])
                 self.assertFalse((result_path.parent / "best.csv").exists())
 

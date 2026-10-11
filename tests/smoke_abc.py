@@ -9,7 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -36,12 +36,13 @@ class EvaluatorTests(unittest.TestCase):
                 budget = ActionBudget(20)
                 baseline = self.evaluate([], circuit=circuit, budget=budget, timeout=None)
                 self.assertEqual(tuple(baseline["metrics"].values()), expected)
-                self.assertEqual(baseline["tool_calls"], 0)
+                self.assertEqual(baseline["tool_calls"], 1)
                 results = []
-                for recipe in ([0], [0, 4, 12], [0, 0], [14, 15]):
+                for recipe in ([0], [0, 4, 12], [0, 0], [14, 15], list(range(16)) + [0, 4, 8, 12]):
                     result = self.evaluate(recipe, circuit=circuit, budget=budget)
                     self.assertEqual(result["recipe"], recipe)
-                    self.assertEqual(result["tool_calls"], len(recipe))
+                    self.assertEqual(result["tool_calls"], 1)
+                    self.assertEqual(result["transformation_count"], len(recipe))
                     self.assertEqual(result["abc_process_invocations"], 1)
                     self.assertEqual(set(result["metrics"]), {"lut_count", "lut_levels"})
                     raw = re.findall(r"\bnd\s*=\s*(\d+).*?\blev\s*=\s*(\d+)", result["abc_output"])
@@ -52,11 +53,11 @@ class EvaluatorTests(unittest.TestCase):
                 # A baseline after optimized evaluations must reload the original.
                 after = self.evaluate([], circuit=circuit, budget=budget)
                 self.assertEqual(after["metrics"], baseline["metrics"])
-                self.assertEqual(budget.tool_calls, 11)
-                self.assertEqual(after["total_tool_calls"], 11)
+                self.assertEqual(budget.tool_calls, 8)
+                self.assertEqual(after["total_tool_calls"], 8)
 
     def test_real_execution_order_and_original_input(self):
-        run = subprocess.run
+        run = subprocess.Popen
         recipe = [8, 0, 14, 0]
 
         def inspect_and_run(args, **kwargs):
@@ -70,23 +71,30 @@ class EvaluatorTests(unittest.TestCase):
             self.assertEqual(commands[-3:-1], ["if -K 6;", "print_stats;"])
             return run(args, **kwargs)
 
-        with patch("common.abc.subprocess.run", side_effect=inspect_and_run):
-            self.assertEqual(self.evaluate(recipe)["tool_calls"], 4)
+        with patch("common.abc.subprocess.Popen", side_effect=inspect_and_run):
+            self.assertEqual(self.evaluate(recipe)["tool_calls"], 1)
 
     def test_real_shared_budget_and_exhaustion(self):
-        budget = ActionBudget(3)
+        budget = ActionBudget(2)
         self.assertEqual(self.evaluate([0], budget=budget)["total_tool_calls"], 1)
         result = self.evaluate([14, 15], budget=budget)
-        self.assertEqual((result["tool_calls"], result["total_tool_calls"]), (2, 3))
-        with patch("common.abc.subprocess.run") as run:
+        self.assertEqual((result["tool_calls"], result["total_tool_calls"]), (1, 2))
+        with patch("common.abc.subprocess.Popen") as run:
             with self.assertRaises(BudgetExceeded):
                 self.evaluate([12], budget=budget)
             run.assert_not_called()
-        self.assertEqual(self.evaluate([], budget=budget)["total_tool_calls"], 3)
+        with self.assertRaises(BudgetExceeded):
+            self.evaluate([], budget=budget)
+        budget = ActionBudget(1)
+        self.assertEqual(self.evaluate([0] * 20, budget=budget)["total_tool_calls"], 1)
+        with patch("common.abc.subprocess.Popen") as launch:
+            with self.assertRaises(BudgetExceeded):
+                self.evaluate([], budget=budget)
+            launch.assert_not_called()
 
     def test_invalid_indices_and_timeouts(self):
         budget = ActionBudget(3)
-        with patch("common.abc.subprocess.run") as run:
+        with patch("common.abc.subprocess.Popen") as run:
             for index in (-1, 16, True, 1.5, "0"):
                 with self.subTest(index=index), self.assertRaisesRegex(ValueError, "indices 0-15"):
                     self.evaluate([index], budget=budget)
@@ -98,7 +106,7 @@ class EvaluatorTests(unittest.TestCase):
 
     def test_missing_input_and_executable(self):
         budget = ActionBudget(3)
-        with tempfile.TemporaryDirectory() as directory, patch("common.abc.subprocess.run") as run:
+        with tempfile.TemporaryDirectory() as directory, patch("common.abc.subprocess.Popen") as run:
             with self.assertRaises(FileNotFoundError):
                 self.evaluate([], circuit=Path(directory) / "missing.aig", budget=budget)
             with patch("common.abc.shutil.which", return_value=None):
@@ -107,53 +115,74 @@ class EvaluatorTests(unittest.TestCase):
             run.assert_not_called()
         self.assertEqual(budget.tool_calls, 0)
 
-    def test_command_errors_and_partial_action_accounting(self):
+    def test_command_errors_preserve_diagnostics_and_charge_one(self):
         for code in (0, 1):
             with self.subTest(returncode=code):
                 budget = ActionBudget(3)
                 output = "ACTION_test_0\n** cmd error: failed\n"
-                process = subprocess.CompletedProcess([], code, output)
+                process = Mock(returncode=code)
+                process.communicate.return_value = (output, None)
                 with patch("common.abc.uuid.uuid4", return_value=SimpleNamespace(hex="test")), \
-                     patch("common.abc.subprocess.run", return_value=process):
+                     patch("common.abc.subprocess.Popen", return_value=process):
                     with self.assertRaises(ABCError) as caught:
                         self.evaluate([0, 14], budget=budget)
                 self.assertEqual(caught.exception.completed_actions, 1)
                 self.assertEqual(caught.exception.output, output)
-                self.assertIsNone(budget.tool_calls)
-                with self.assertRaises(BudgetExceeded):
-                    self.evaluate([], budget=budget)
+                self.assertEqual(budget.tool_calls, 1)
 
     def test_timeouts_preserve_known_counts(self):
-        cases = [([0, 14], b"ACTION_test_0\n", None, 1),
-                 ([0, 14], b"ACTION_test_0\nACTION_test_1\n", 2, 2),
-                 ([], b"", 0, 0)]
+        cases = [([0, 14], b"ACTION_test_0\n", 1, 1),
+                 ([0, 14], b"ACTION_test_0\nACTION_test_1\n", 1, 2),
+                 ([], b"", 1, 0)]
         for recipe, output, expected_count, completed in cases:
             with self.subTest(recipe=recipe, output=output):
                 budget = ActionBudget(3)
                 error = subprocess.TimeoutExpired("abc", 0.01, output=output)
+                process = Mock()
+                process.communicate.side_effect = [error, (output.decode(), None)]
                 with patch("common.abc.uuid.uuid4", return_value=SimpleNamespace(hex="test")), \
-                     patch("common.abc.subprocess.run", side_effect=error):
+                     patch("common.abc.subprocess.Popen", return_value=process):
                     with self.assertRaisesRegex(ABCError, "timed out") as caught:
                         self.evaluate(recipe, budget=budget, timeout=0.01)
                 self.assertEqual(budget.tool_calls, expected_count)
                 self.assertEqual(caught.exception.completed_actions, completed)
                 self.assertEqual(caught.exception.output, output.decode())
-                if expected_count is None:
-                    with self.assertRaises(BudgetExceeded):
-                        budget.check(0)
+                process.kill.assert_called_once()
 
-    def test_launch_failure_does_not_charge_actions(self):
+    def test_launch_failure_does_not_charge_calls(self):
         budget = ActionBudget(3)
-        with patch("common.abc.subprocess.run", side_effect=OSError("launch failure")):
+        with patch("common.abc.subprocess.Popen", side_effect=OSError("launch failure")):
             with self.assertRaisesRegex(ABCError, "Cannot execute ABC"):
                 self.evaluate([0], budget=budget)
         self.assertEqual(budget.tool_calls, 0)
 
+    def test_unexpected_launch_failure_stops_with_uncertain_count(self):
+        budget = ActionBudget(3)
+        with patch("common.abc.subprocess.Popen", side_effect=RuntimeError("uncertain launch")):
+            with self.assertRaisesRegex(ABCError, "launch state uncertain"):
+                self.evaluate([0], budget=budget)
+        self.assertIsNone(budget.tool_calls)
+        with self.assertRaises(BudgetExceeded):
+            budget.check()
+
+    def test_unexpected_wait_failure_keeps_known_charge(self):
+        budget = ActionBudget(3)
+        process = Mock()
+        process.communicate.side_effect = OSError("read failure")
+        with patch("common.abc.subprocess.Popen", return_value=process):
+            with self.assertRaisesRegex(ABCError, "Cannot collect"):
+                self.evaluate([0], budget=budget)
+        self.assertEqual(budget.tool_calls, 1)
+        process.kill.assert_called_once()
+        process.wait.assert_called_once()
+
     def test_missing_metrics_never_returns_qor(self):
         output = "ACTION_test_0\nFINISHED_test\nno statistics\n"
         budget = ActionBudget(3)
+        process = Mock(returncode=0)
+        process.communicate.return_value = (output, None)
         with patch("common.abc.uuid.uuid4", return_value=SimpleNamespace(hex="test")), \
-             patch("common.abc.subprocess.run", return_value=subprocess.CompletedProcess([], 0, output)):
+             patch("common.abc.subprocess.Popen", return_value=process):
             with self.assertRaisesRegex(ABCError, "Missing lut"):
                 self.evaluate([0], budget=budget)
         self.assertEqual(budget.tool_calls, 1)
@@ -229,8 +258,8 @@ def main():
                         abc_binary=args.abc_binary, timeout=30,
                         **({"lut_k": 6} if metric == "lut" else {}),
                     )
-                    if result["tool_calls"] != len(recipe) or budget.tool_calls != len(recipe):
-                        raise RuntimeError("Action accounting mismatch")
+                    if result["tool_calls"] != 1 or budget.tool_calls != 1:
+                        raise RuntimeError("Invocation accounting mismatch")
                     label = "and" if metric == "aig" else "nd"
                     raw = re.findall(rf"\b{label}\s*=\s*(\d+).*?\blev\s*=\s*(\d+)", result["abc_output"])
                     if not raw or tuple(map(int, raw[-1])) != tuple(result["metrics"].values()):
