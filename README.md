@@ -2,7 +2,8 @@
 
 Minimal experimental Python repository for comparable QoR measurements in a
 research paper. All nine algorithms, including AST-GWO, are comparison baselines.
-No algorithms are integrated and no optimization experiments have been run.
+NSGA-II is integrated for reproducible LUT QoR collection; the other eight
+engines remain placeholders. Only small smoke runs have been performed.
 Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
 
 ## Layout and status
@@ -13,11 +14,12 @@ common/actions.py   # implemented: action indices and default budget
 common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
 benchmarks/        # pinned EPFL/ISPRAS submodules; 11 ISCAS85 AIG conversions and validation notes
 results/           # ignored smoke evidence and future experiment CSV outputs
-run.py             # argparse entry point; all engines report not implemented
-requirements.txt   # standard library only; Python >= 3.10
+run.py             # NSGA-II runner; all other engines report not implemented
+requirements.txt   # standard library only, including NSGA-II; Python >= 3.10
 ```
 
-Empty directories contain `.gitkeep`. Each future algorithm gets `engine.py` and
+NSGA-II has `engine.py` and `config.yaml`. Empty algorithm directories contain
+`.gitkeep`. Each future algorithm gets `engine.py` and
 `config.yaml` for its own hyperparameters when integrated. No dummy engines or
 speculative configurations are supplied. Every engine must import the shared
 pool and use shared evaluation; no configuration framework is needed.
@@ -125,28 +127,60 @@ provenance limitations. All 11 ISCAS85 AIG conversions pass source equivalence;
 EPFL adder also passes read/mapping checks. Full-suite action compatibility is
 still pending.
 
-## Runner and future results
+## NSGA-II runner and results
 
-From the project directory:
+The integrated discrete NSGA-II variant uses binary rank/crowding tournaments,
+uniform crossover, random-reset mutation and elitist nondominated/crowding
+survival. Both LUT count and LUT levels are minimized separately. See
+[provenance and adaptations](algorithms/nsga2/PROVENANCE.md) for source inspection,
+licensing decisions, precise operators and deterministic tie policies. This is
+an independent implementation of the supplied example's variant, not BOiLS's
+integer SBX/polynomial-mutation variant. No external source was copied.
+
+From the project directory, these small real-ABC smoke runs use existing inputs:
 
 ```bash
-python run.py --help
-python run.py --algorithm drills --circuit benchmarks/example.aig
-python run.py --algorithm nsga2 --circuit benchmarks/example.aig
-python run.py --algorithm ast_gwo --circuit benchmarks/example.aig
-# Future BOiLS use requires a selected --max-tool-calls value.
+python run.py --algorithm nsga2 --circuit benchmarks/epfl/random_control/ctrl.aig --seed 7 --recipe-length 3 --population-size 4 --offspring-count 3 --generations 2 --max-tool-calls 30
+python run.py --algorithm nsga2 --circuit benchmarks/converted/iscas85/c17.aig --seed 7 --recipe-length 3 --population-size 4 --offspring-count 3 --generations 2 --max-tool-calls 30
+python tests/test_nsga2.py
+python tests/smoke_abc.py --evaluator-only
 ```
 
-The example circuit is a placeholder path. Every algorithm currently prints
-`not implemented` to stderr and exits 2, without executing ABC or writing results.
-`--seed` and `--max-tool-calls` are reserved for integration; they do not enable an
-engine. No ML packages need to be installed for this skeleton.
+Defaults: seed 0, recipe length 20, population 30, offspring count 30,
+50 offspring generations after initialization, crossover probability 0.9,
+per-gene mutation probability 0.05, LUT K=6, timeout 60 seconds,
+`yosys-abc`, and **4000 executed pool actions**. CLI options override
+[config.yaml](algorithms/nsga2/config.yaml); `--config PATH` accepts JSON syntax,
+a YAML subset parsed by the standard library (no PyYAML dependency). Unknown
+keys and invalid settings fail before evaluation. `--timeout none` (or JSON
+`null`) disables the deadline. `--objective lut_count,lut_levels` is the only
+supported objective; scalar/ASIC/AIG objectives are rejected explicitly.
 
-Future numerical outputs belong in `results/*.csv`. The planned columns are
-`algorithm,circuit,seed,best_recipe,metric,lut_k,aig_nodes,aig_levels,lut_count,lut_levels,asic_area,asic_delay,tool_calls,runtime_seconds`.
-Store `best_recipe` as a CSV-quoted JSON list of action indices, leave inapplicable
-metrics blank, and record mapping/constraint units and tool/source revisions with
-the experiment. No experiment CSV writer or fabricated data is included yet.
+Ordered full recipes, including repeats, are cached only within a run. Every
+cache miss uses the shared evaluator and the same budget object; each actually
+executed length-L recipe costs L actions. Cache hits launch no ABC and cost zero.
+Stop at the first unaffordable cache miss without truncating the recipe.
+Fixed seed/config/input/ABC bytes give reproducible search and best selection.
+
+Each invocation writes a unique `results/nsga2-*/` directory:
+
+- `result.json`: status, best solution, Pareto archive, cumulative `tool_calls`,
+  runtime, successful evaluation/cache counts, completed generations, full config,
+  provenance hashes (input, executable, engine, evaluator, source reference),
+  Python version, action pool and failure diagnostics.
+- `pareto.json`: separate nondominated archive over all successful evaluations,
+  including distinct recipes with identical QoR and partial-generation candidates.
+- `best.csv`: one measured representative chosen by lexicographic
+  **(LUT count, LUT levels, recipe indices)**. `best_recipe` is a CSV-quoted JSON
+  action-index list; config and provenance are JSON fields too.
+
+`completed` and `budget_exhausted` are distinct statuses; budget exhaustion may
+produce a measured partial-run CSV. Zero evaluated candidates produce no CSV and
+exit 1. Any evaluation failure aborts, writes diagnostic JSON and partial archive,
+sets best to null, writes no CSV, and exits 1. Uncertain counts remain JSON null.
+No fake objective values, budget reset or persistent caches are used. Runtime and
+unique output paths vary between otherwise reproducible runs. Results are ignored
+by git. Other engines still print `not implemented`, exit 2, and execute no ABC.
 
 ## Inspected integration sources
 
@@ -157,7 +191,7 @@ those sources, not installed requirements of this repository.
 | --- | --- | --- |
 | AST-GWO | [ast-gwo-aicas2026](https://github.com/ddbTran/ast-gwo-aicas2026): `scripts/run_single.sh`, `algorithms/ast_gwo/ast_gwo.py`, `utils.py`, `evaluator.py` | NumPy; pandas/matplotlib for outputs; ABC LUT mapping. Existing opcode dictionary differs from this required pool. |
 | DRiLLS | [DRiLLS](https://github.com/scale-lab/DRiLLS): `drills.py`, `drills/model.py`, `fpga_session.py`, `scl_session.py` | TensorFlow 1.12, NumPy, PyYAML, ABC/Yosys; documented Python 3.6 environment. A2C; separate FPGA and ASIC sessions. |
-| NSGA-II | [BOiLS checkout](https://github.com/SZU-AdvTech-2023/050-BOiLS-Bayesian-Optimisation-for-Logic-Synthesis): `GA/main_nsga2.py`, `GA/nsga2_exp.py` | pymoo 0.5.0, NumPy, pandas, joblib; this fork evaluates through iMAP. Local `../example/nsga2_logic_synthesis.py` is an alternative standard-library ABC implementation with Pareto selection and caching. Choose source/variation operators before porting. |
+| NSGA-II | [BOiLS checkout](https://github.com/SZU-AdvTech-2023/050-BOiLS-Bayesian-Optimisation-for-Logic-Synthesis): `GA/main_nsga2.py`, `GA/nsga2_exp.py` | pymoo 0.5.0, NumPy, pandas, joblib; this fork evaluates through iMAP. The integrated engine independently implements the supplied example's discrete uniform-crossover/random-reset variant with shared ABC evaluation; see provenance above. |
 | ERL-LS | [ERL-LS](https://github.com/Intelligent-Computing-Research-Group/ERL-LS): `ERL-abcRL/testReinforce_aig.py`, `reinforce_aig.py`, `env_aig.py` | PyTorch, DGL, NumPy, Numba, `abc_py`/`mtlPy`. Imports reference absent helper modules (`perf_analysis`, `env_forLargeFile`, `convert_list2actions`, `env`); restoration and variant selection needed. `ERL-DRiLLS` has no implementation in this checkout. |
 | BOiLS | [BOiLS checkout](https://github.com/SZU-AdvTech-2023/050-BOiLS-Bayesian-Optimisation-for-Logic-Synthesis): `Boils/main_boils.py`, `boils_exp.py`, `optimizer.py`, `sessions/utils_eval.py` | PyTorch, GPyTorch, sentence-transformers, NumPy, pandas, joblib; Python 3.7 documented; iMAP backend here. Budget undecided. |
 | FlowTune | [FlowTune](https://github.com/Yu-Maryland/FlowTune): `FlowTune-AIG-Optimization/single_design.sh`, `src/src/base/abci/abc.c` (`ftune`) | Custom ABC C/C++ command, readline, OpenMP, build tools; optional Yosys/VTR flows. Internal actions need observable accounting. |
@@ -168,10 +202,10 @@ those sources, not installed requirements of this repository.
 The supplied `../example/drill_logic_synthesis.py` also uses the exact shared pool
 and ABC LUT parsing, but explicitly substitutes linear-policy REINFORCE for
 DRiLLS's A2C. It is a useful utility reference, not an equivalent original DRiLLS
-implementation. Neither example is copied or executed. Their generation/episode
-limits do not enforce this benchmark's executed-action budget.
+implementation. Neither example source is copied or executed. The NSGA-II adaptation adds the
+shared executed-action budget missing from the example.
 
-Before integrating the first engine, select its faithful source/variant, QoR
+Before integrating another engine, select its faithful source/variant, QoR
 track and objective (including Pareto reporting), LUT K or ASIC library/constraints,
 circuit suite, recipe lengths, seeds, per-algorithm hyperparameters, and policies
 for training, cache hits and failures. Preserve core algorithms and document the
