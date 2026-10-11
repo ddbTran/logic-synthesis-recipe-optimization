@@ -2,7 +2,8 @@
 
 Minimal experimental Python repository for comparable QoR measurements in a
 research paper. All nine algorithms, including AST-GWO, are comparison baselines.
-No algorithms are integrated and no experiments or results have been generated.
+No algorithms are integrated and no optimization experiments have been run.
+Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
 
 ## Layout and status
 
@@ -10,8 +11,8 @@ No algorithms are integrated and no experiments or results have been generated.
 algorithms/{ast_gwo,drills,nsga2,erl_ls,boils,flowtune,cb_evo,rl4ls,greedy}/
 common/actions.py   # implemented: action indices and default budget
 common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
-benchmarks/        # empty; supply circuits
-results/           # empty; future CSV outputs (ignored by Git)
+benchmarks/        # pinned EPFL/ISCAS85 submodules; c17 conversion and validation notes
+results/           # ignored smoke evidence and future experiment CSV outputs
 run.py             # argparse entry point; all engines report not implemented
 requirements.txt   # standard library only; Python >= 3.10
 ```
@@ -82,8 +83,9 @@ Supply an ABC-readable `.aig`, `.aiger`, `.blif`, `.bench`, or supported `.v` fi
 ABC is not a general RTL compiler. The default executable is `yosys-abc`; override
 `abc_binary` with an executable name or path. The inspected environment has
 `/usr/bin/yosys-abc` (ABC 1.01), and its command help exposes `&dsdb` and `&sopb`.
-This is a capability check, not an end-to-end synthesis validation. Pin the ABC
-build and validate all actions on the selected circuit suite before experiments.
+All 16 actions and LUT-6 mapping now pass smoke checks on EPFL ctrl and converted
+ISCAS85 c17; see [benchmark validation](benchmarks/README.md) for measurements and
+provenance limitations. Validation of the remaining circuits is still pending.
 
 ## Runner and future results
 
@@ -106,7 +108,7 @@ Future numerical outputs belong in `results/*.csv`. The planned columns are
 `algorithm,circuit,seed,best_recipe,metric,lut_k,aig_nodes,aig_levels,lut_count,lut_levels,asic_area,asic_delay,tool_calls,runtime_seconds`.
 Store `best_recipe` as a CSV-quoted JSON list of action indices, leave inapplicable
 metrics blank, and record mapping/constraint units and tool/source revisions with
-the experiment. No CSV writer or fabricated data is included yet.
+the experiment. No experiment CSV writer or fabricated data is included yet.
 
 ## Inspected integration sources
 
