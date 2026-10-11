@@ -18,8 +18,11 @@ def main():
     parser.add_argument("--config", help="NSGA-II JSON-subset YAML configuration")
     for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k"):
         parser.add_argument("--" + name, type=int)
-    for name in ("crossover-rate", "mutation-rate"):
+    for name in ("crossover-rate", "mutation-rate", "weight-area", "weight-delay"):
         parser.add_argument("--" + name, type=float)
+    parser.add_argument("--optimization-mode", choices=("pareto", "weighted_sum"),
+                        default=argparse.SUPPRESS,
+                        help="Optimization mode (default: weighted_sum; config may select pareto)")
     parser.add_argument("--timeout", type=lambda value: None if value.lower() == "none" else float(value),
                         default=argparse.SUPPRESS, help="ABC seconds, or none to disable")
     parser.add_argument("--abc-binary")

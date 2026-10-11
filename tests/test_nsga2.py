@@ -29,7 +29,7 @@ class NSGA2Tests(unittest.TestCase):
 
     def config(self, **overrides):
         values = dict(recipe_length=3, population_size=4, offspring_count=3,
-                      generations=3, max_tool_calls=100, seed=42)
+                      generations=3, max_tool_calls=100, seed=42, optimization_mode="pareto")
         values.update(overrides)
         return e.Config(**values)
 
@@ -74,6 +74,12 @@ class NSGA2Tests(unittest.TestCase):
         for key in ("best", "pareto", "tool_calls", "cache_hits", "completed_generations"):
             self.assertEqual(first[key], second[key])
         self.assertEqual(first["completed_generations"], 3)
+        # Frozen before scalar mode was added: explicit Pareto search is unchanged.
+        self.assertEqual(first["best"], {"recipe": [1, 0, 2], "lut_count": 3, "lut_levels": 97})
+        self.assertEqual([p["recipe"] for p in first["pareto"]],
+                         [[1, 0, 2], [3, 2, 4], [3, 0, 8], [7, 0, 5],
+                          [3, 2, 13], [7, 7, 4], [7, 7, 5]])
+        self.assertEqual((first["tool_calls"], first["cache_hits"]), (7, 6))
         self.assertEqual(first["successful_evaluations"] + first["cache_hits"], 4 + 3 * 3)
         pairs = [(p["lut_count"], p["lut_levels"]) for p in first["pareto"]]
         self.assertFalse(any(e.dominates(a, b) for a in pairs for b in pairs))
@@ -164,6 +170,19 @@ class NSGA2Tests(unittest.TestCase):
                           config.generations, config.recipe_length, config.max_tool_calls,
                           config.lut_k), (0, 40, 40, 99, 20, 4000, 6))
         self.assertEqual(config.population_size + config.offspring_count * config.generations, 4000)
+        self.assertEqual((config.optimization_mode, config.weight_area, config.weight_delay),
+                         ("weighted_sum", 0.5, 0.5))
+        # Old config files inherit the new default; explicit Pareto remains available.
+        values = asdict(config)
+        for key in ("optimization_mode", "weight_area", "weight_delay"):
+            del values[key]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old-config.yaml"
+            path.write_text(json.dumps(values))
+            self.assertEqual(e.load_config(path), config)
+            values["optimization_mode"] = "pareto"
+            path.write_text(json.dumps(values))
+            self.assertEqual(e.load_config(path).optimization_mode, "pareto")
         for values in ({"population_size": 1}, {"recipe_length": 0}, {"generations": -1},
                        {"offspring_count": 0}, {"timeout": float("nan")},
                        {"mutation_rate": 2}, {"objective": "weighted_sum"}, {"max_tool_calls": -1}):
@@ -207,6 +226,7 @@ class NSGA2Tests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 process = subprocess.run(
                     [sys.executable, str(runner), "--algorithm", "nsga2", "--circuit", str(circuit),
+                     "--optimization-mode", "pareto",
                      "--seed", "7", "--recipe-length", "20", "--population-size", "2",
                      "--offspring-count", "2", "--generations", "1", "--max-tool-calls", "4",
                      "--lut-k", "6", "--crossover-rate", "0.8", "--mutation-rate", "1",
@@ -219,7 +239,8 @@ class NSGA2Tests(unittest.TestCase):
                 self.assertEqual(result["tool_calls"], 4)
                 self.assertEqual(result["config"], asdict(e.Config(
                     seed=7, population_size=2, offspring_count=2, generations=1,
-                    max_tool_calls=4, crossover_rate=0.8, mutation_rate=1, timeout=None)))
+                    max_tool_calls=4, crossover_rate=0.8, mutation_rate=1, timeout=None,
+                    optimization_mode="pareto")))
                 events = [json.loads(line) for line in (result_path.parent / "progress.jsonl").read_text().splitlines()]
                 self.assertEqual(events[-1]["tool_calls"], result["tool_calls"])
                 self.assertEqual(events[-1]["budget_utilization_percent"], 100)

@@ -10,5 +10,8 @@
   "timeout": 60.0,
   "abc_binary": "yosys-abc",
   "objective": "lut_count,lut_levels",
+  "optimization_mode": "weighted_sum",
+  "weight_area": 0.5,
+  "weight_delay": 0.5,
   "max_tool_calls": 4000
 }

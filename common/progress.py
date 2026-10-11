@@ -21,10 +21,19 @@ class ProgressLogger:
             return
         best = event["best"]
         qor = f"LUTs={best['lut_count']} levels={best['lut_levels']}" if best else "LUTs=n/a levels=n/a"
+        mode = event["optimization_mode"]
+        if mode == "weighted_sum":
+            fitness = event["weighted_fitness"]
+            selection = f"fitness={fitness:.8g}" if fitness is not None else "fitness=n/a"
+            if event["event"] == "baseline":
+                baseline = event["baseline_qor"]
+                selection += f"; baseline LUTs={baseline['lut_count']} levels={baseline['lut_levels']}"
+        else:
+            selection = f"pareto={event['pareto_size']}"
         percent = event["budget_utilization_percent"]
         utilization = f"{percent:.2f}%" if percent is not None else "unknown"
         print(f"nsga2 {event['event']} {event['generation']}/{event['generations']}: "
-              f"{qor}; pareto={event['pareto_size']}; "
+              f"mode={mode}; {qor}; {selection}; "
               f"ABC calls={event['tool_calls']}/{event['max_tool_calls']} ({utilization}); "
               f"cache_hits={event['cache_hits']}; elapsed={event['elapsed_seconds']:.3f}s; "
               f"status={event['status']}", flush=True)

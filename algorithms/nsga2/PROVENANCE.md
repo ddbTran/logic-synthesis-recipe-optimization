@@ -1,6 +1,6 @@
 # NSGA-II variant and source inspection
 
-The integration implements the discrete variant described in the supplied local
+The Pareto mode implements the discrete variant described in the supplied local
 `../example/nsga2_logic_synthesis.py`, SHA-256
 `b1a33ad832d067f8b21927980e1518ccdbad6d85840e7f376ad1b89346e797e3`.
 It is an independent implementation: **no external source text was copied**.
@@ -20,7 +20,7 @@ duplicate elimination, and iMAP/multiple-design plumbing would require more
 dependencies and adaptations than the discrete example. This integration must
 not be described as a reproduction of BOiLS's exact operators or experiments.
 
-## Preserved algorithmic behavior
+## Preserved Pareto algorithmic behavior (explicit mode)
 
 - Fixed-length ordered chromosomes, uniform random initialization; repeated
   actions and duplicate individuals are allowed.
@@ -38,22 +38,74 @@ not be described as a reproduction of BOiLS's exact operators or experiments.
 
 ## Adaptations for this benchmark
 
-Import the shared 16 actions directly; remove the example's evaluator, baseline
-normalization, weighted reporting score and repeated-run driver.
+Import the shared 16 actions directly; replace the example's evaluator and
+reporting policies, and remove its repeated-run driver.
 Every cache miss calls `common.abc.evaluate_recipe` with the same `ActionBudget`
 object. No persistent cache, prefix evaluation, parallelism, or budget reset.
 Check one invocation before ABC; stop at the first unaffordable cache miss.
-Already evaluated offspring remain in the archive if a generation stops early.
+In Pareto mode, already evaluated offspring remain in the archive if a
+generation stops early.
 Generation count means offspring generations **after** initialization; offspring
 count is configurable independently of population size, including odd counts.
 
 Use raw LUT count and levels; only `objective: lut_count,lut_levels` is supported.
-Other objectives are rejected rather than changing NSGA-II into a scalar GA.
+`optimization_mode: pareto` retains the two-objective NSGA-II search.
 Maintain the nondominated archive over all successful evaluations, preserving
 distinct recipes even when QoR is identical. Select the CSV representative by
 lexicographic `(LUT count, LUT levels, recipe tuple)` across that archive.
 The example reported a final-population front and weighted best; these reporting
-policies are deliberately replaced. No scalar value affects search selection.
+policies are deliberately replaced. No scalar value affects Pareto selection.
+
+## Default weighted sum variant
+
+The default `optimization_mode: weighted_sum` selects a scalar-objective elitist
+genetic algorithm using the same initialization, binary tournament sampling, uniform
+crossover, random-reset mutation and generation convention. It is not unchanged
+multi-objective NSGA-II. Both tournament winners and parent-plus-offspring
+survivors minimize
+
+```
+weight_area * (lut_count / baseline_lut_count)
+  + weight_delay * (lut_levels / baseline_lut_levels)
+```
+
+Equal fitness is resolved by recipe tuple, without a secondary LUT/level
+preference. Distinct individuals with equal keys retain stable input order.
+Weights default to 0.5/0.5 in both modes and must be finite, nonnegative and sum
+to one within absolute tolerance 1e-9; they are validated before ABC launches.
+
+Weighted mode first evaluates the original circuit with an empty recipe, using
+the same run-wide `ActionBudget`, ABC binary, LUT K and timeout as candidates.
+Both measured baseline metrics must be positive. This invocation costs one
+call, including a failure or timeout; a failed baseline aborts the search.
+The baseline is a normalization reference, not a search candidate. Cache hits
+remain free. Default candidate attempts still number 40 + 40 * 99 = 4000, but
+only 3999 candidate invocations fit after the baseline if all recipes are unique.
+The first unaffordable candidate attempt is recorded and stops the run with
+`budget_exhausted`; the budget and generation convention are never increased.
+
+Weighted mode tracks the scalar best across all measured candidates, including
+partial generations. It does not compute or report a Pareto archive. The
+`pareto` list in `result.json` is empty for compatibility; a separate `best.json`
+replaces `pareto.json`. JSON and CSV identify the mode, weights, baseline QoR,
+weighted fitness, best recipe and actual calls. `successful_evaluations` counts
+candidate successes; `baseline_evaluations` separately counts successful
+baseline measurements. `candidate_attempts` includes cache hits and the first
+rejected candidate if budget exhaustion interrupts a run. Progress events use
+the existing flushed logger, include mode and baseline QoR, and show scalar
+fitness rather than Pareto size in weighted mode.
+
+CLI selection (all existing overrides remain supported):
+
+```
+.venv/bin/python run.py --algorithm nsga2 --circuit <circuit.aig> \
+  --optimization-mode weighted_sum --weight-area 0.8 --weight-delay 0.2
+```
+
+Omitting `--optimization-mode` uses the config mode, defaulting to `weighted_sum`.
+Selecting `pareto` in the config or CLI retains the original two-objective
+search and incurs no baseline invocation. Older config files without the new
+fields inherit the Weighted Sum default.
 
 Ordinary budget exhaustion is a labeled partial run, with genuine measured best
 and archive if available; insufficient budget for one recipe writes no CSV.
