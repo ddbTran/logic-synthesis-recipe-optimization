@@ -7,6 +7,29 @@ collection; the other seven engines remain placeholders. Only small smoke runs
 have been performed.
 Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
 
+## Quick start
+
+Use Python 3.10 or newer and an ABC executable exposing the shared actions
+(default: `yosys-abc`). The integrated Python engines require only the standard
+library. Run commands from this repository's root:
+
+```bash
+python run.py --help
+python tests/smoke_abc.py --evaluator-only
+
+# Two greedy depths: 32 candidate evaluations plus one baseline invocation.
+python run.py --algorithm greedy \
+  --circuit benchmarks/epfl/arithmetic/adder.aig \
+  --recipe-length 2 --max-tool-calls 32 --checkpoint-interval 16 \
+  --seed 0 --timeout 60
+```
+
+Inspect `results/greedy/epfl/adder/len2/seed_0/result.json` for the termination
+status and both the constructed recipe and best-so-far candidate. Rerunning
+these declared parameters and seed replaces that directory's experiment
+artifacts. See [Greedy](#sequential-forward-greedy) and
+[NSGA-II](#nsga-ii-runner-and-results) for configuration and output details.
+
 ## Layout and status
 
 ```text
@@ -16,8 +39,14 @@ common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
 benchmarks/        # pinned EPFL/ISPRAS submodules; 11 ISCAS85 AIG conversions and validation notes
 results/           # ignored smoke evidence and future experiment CSV outputs
 run.py             # NSGA-II / Greedy runner; other engines report not implemented
-requirements.txt   # standard library only, including NSGA-II; Python >= 3.10
+requirements.txt   # standard library only for integrated engines; Python >= 3.10
 ```
+
+| CLI algorithm | Implementation | Optimization modes |
+| --- | --- | --- |
+| `greedy` | Sequential Forward Greedy | `weighted_sum` |
+| `nsga2` | Scalar GA by default; discrete NSGA-II in Pareto mode | `weighted_sum`, `pareto` |
+| Other seven identifiers | Placeholders; exit 2 without ABC execution | None |
 
 NSGA-II and Greedy each have `engine.py` and `config.yaml`. Empty algorithm
 directories contain `.gitkeep`. Each future algorithm gets `engine.py` and
@@ -129,9 +158,12 @@ still pending.
 
 ## NSGA-II runner and results
 
-The integrated discrete NSGA-II variant uses binary rank/crowding tournaments,
-uniform crossover, random-reset mutation and elitist nondominated/crowding
-survival. Both LUT count and LUT levels are minimized separately. See
+The `nsga2` engine defaults to a scalar genetic algorithm using normalized
+weighted-sum fitness for parent selection, survival and best selection.
+`--optimization-mode pareto` selects discrete NSGA-II with binary rank/crowding
+tournaments and elitist nondominated/crowding survival, minimizing LUT count and
+LUT levels separately. Both modes use uniform crossover and random-reset
+mutation. See
 [provenance and adaptations](algorithms/nsga2/PROVENANCE.md) for source inspection,
 licensing decisions, precise operators and deterministic tie policies. This is
 an independent implementation of the supplied example's variant, not BOiLS's
@@ -245,11 +277,12 @@ A complete search makes 16 evaluations per depth, so the default stops after
 It finishes after reaching its target length; it does not spend spare calls on
 additional search methods.
 
-```bash
-# Small real-ABC smoke run; not a full benchmark experiment.
-python run.py --algorithm greedy --circuit benchmarks/epfl/arithmetic/adder.aig --recipe-length 2 --max-tool-calls 32 --checkpoint-interval 16 --seed 0
-python -m unittest discover -s tests -p test_greedy.py -v
-```
+The [quick-start command](#quick-start) runs a small real-ABC Adder smoke check.
+The validated two-depth run selected recipe `[15, 15]`: 374 LUTs, 10 LUT levels,
+weighted fitness `0.8342596881272194`, and status `completed`. It used 32 candidate
+calls and one baseline call; the baseline measured 254 LUTs and 51 levels.
+These are smoke measurements, not full benchmark results, and depend on the
+circuit and ABC executable recorded in the generated configuration/provenance.
 
 CLI overrides: `--config PATH` (JSON-subset YAML), `--recipe-length`, `--seed`,
 `--max-tool-calls`, `--checkpoint-interval`, `--optimization-mode weighted_sum`,
@@ -301,7 +334,7 @@ Every `checkpoint` includes these fields (also present on other engine events):
 | --- | --- |
 | `event` | `"checkpoint"` |
 | `evaluations` | Integer count of successful, non-cached candidate recipe evaluations |
-| `tool_calls` | Cumulative launched candidate sequences, excluding generation 0; integer, or null on uncertain launches |
+| `tool_calls` | Cumulative launched candidate sequences, excluding the normalization baseline; integer, or null on uncertain launches |
 | `elapsed_seconds` | Cumulative wall-clock runtime in seconds |
 | `best_fitness` | Lowest measured candidate weighted fitness so far, or null |
 | `best_lut_count`, `best_lut_levels` | QoR of that same scalar winner, or null |
@@ -311,7 +344,8 @@ baseline_levels` (lower is better). The original circuit's empty-recipe baseline
 is a normalization reference, excluded from `evaluations` and counted separately
 as `baseline_evaluations`. Its invocation is tracked as `baseline_tool_calls`
 and excluded from candidate `tool_calls` and `max_tool_calls`, including failure
-or timeout. Generation 0 therefore displays `ABC calls=0/<budget>`.
+or timeout. The baseline event therefore displays `ABC calls=0/<budget>`
+at NSGA-II generation 0 or Greedy depth 0.
 `abc_process_invocations` includes both baseline and candidate launches. The
 baseline is measured even with a zero candidate budget; baseline failure still
 aborts the run. Initial candidate population evaluations remain budgeted.
@@ -324,19 +358,19 @@ candidate; `cache_hits` and process invocations are separate counters.
 with `--checkpoint-interval`. `common.progress.CheckpointScheduler` is reusable
 by future engines: supply a snapshot after updating measured best/archive and
 call once at termination with `final=True`. Scheduling is independent of
-generations. The evaluator returns only completed full recipes: no intermediate
-QoR inside a recipe is measured. At cumulative call 200 the snapshot records
+generations or greedy depths. The evaluator returns only completed full recipes:
+no intermediate QoR inside a recipe is measured. At cumulative call 200 the snapshot records
 `tool_calls: 200` and `checkpoint_thresholds: [200]`. Each launched recipe
-increments calls by one, so NSGA-II normally crosses one threshold at a time.
+increments calls by one, so the integrated engines cross one threshold at a time.
 The reusable scheduler can group multiple crossed thresholds into one measured
 snapshot if an adapter reports several calls together. Every threshold is
 represented once; use the actual **`tool_calls` as the convergence X-axis**,
-never generations or individual action counts. No interpolation within recipes
-is justified.
+never generations, greedy depths or individual action counts. No interpolation
+within recipes is justified.
 
 A final checkpoint is emitted when counters or measured best/archive differ
 from the last checkpoint, including early termination and cache-only progress.
-Elapsed time, generation and status changes alone do not create duplicate
+Elapsed time, generation/depth and status changes alone do not create duplicate
 checkpoints; the final `summary` always carries termination status and runtime.
 Failed recipes yield no new QoR. Known final sequence counts can cross thresholds;
 uncertain counts remain null and cannot define additional thresholds.
@@ -348,16 +382,35 @@ explicit multi-objective metric rather than treating this representative as a
 scalar optimum.
 
 Sequence-call accounting uses one invocation per sequence. The runner excludes
-the generation-0 measurement from the candidate budget.
+the normalization baseline from the candidate budget.
 Commands, LUT mapping, fitness and search operators are unchanged. The earlier
 action-counting revision used a different budget unit; do not mix its results
 with sequence-based curves. `checkpoint_interval` is recorded in
 `config.json` and held fixed alongside the other settings outside the path label.
 
-Validation: `python -m unittest discover -s tests -v` and
-`python tests/smoke_abc.py --evaluator-only`; the small CLI checks run both modes
-on ctrl/c17 and verify artifacts. `python tests/smoke_abc.py` additionally checks
-c17 conversion, all 16 actions and adder baseline mapping.
+## Validation
+
+```bash
+# Complete unit/integration suite, including both integrated engines.
+python -m unittest discover -s tests -v
+
+# Focused Greedy contracts and real-ABC CLI checks.
+python -m unittest discover -s tests -p test_greedy.py -v
+
+# Shared evaluator budget, parsing, determinism and error checks.
+python tests/smoke_abc.py --evaluator-only
+
+# Additional benchmark conversion, all-action and baseline mapping checks.
+python tests/smoke_abc.py
+```
+
+The implementation validation passed 53 unit/integration tests, including 15
+Greedy tests, and 12 focused evaluator checks. The full benchmark smoke script
+also passed c17 conversion, all 16 actions on ctrl/c17 and Adder baseline mapping.
+The suite includes small real-ABC
+CLI checks for NSGA-II's two modes on ctrl/c17 and Greedy on c17, including
+configuration overrides, output metadata and reproducible reruns. The separate
+Adder smoke run above exercises Greedy end to end without a full experiment.
 
 ## Inspected integration sources
 
