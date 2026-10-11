@@ -1,6 +1,3 @@
 [submodule "benchmarks/epfl"]
 	path = benchmarks/epfl
 	url = https://github.com/lsils/benchmarks.git
-[submodule "benchmarks/iscas85"]
-	path = benchmarks/iscas85
-	url = https://github.com/jpsety/verilog_benchmark_circuits.git
