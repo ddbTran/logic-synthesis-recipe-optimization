@@ -161,8 +161,8 @@ bundled commands do not affect the budget. Action completions are diagnostics.
 Defaults are seed 0, population 40, offspring 40, 99 offspring generations,
 recipe length 20, budget 4000, and 6-LUT mapping. Initialization plus offspring
 allows 40 + 40 * 99 = 4000 evaluation attempts; cache hits launch no ABC and do
-not consume calls. The runner streams flushed terminal and `progress.jsonl`
-events for configuration, baseline, best improvements, generations, checkpoints
+not consume calls. The runner streams generation updates to the terminal; `progress.jsonl`
+retains configuration, baseline, best improvements, generations, checkpoints
 and final status. Checkpoints use the shared scheduler and default interval of
 200 launched sequence calls. See the [common progress schema](../../README.md#common-convergence-progress)
 for exact counting, recipe granularity, threshold grouping, final deduplication

@@ -170,9 +170,10 @@ Other settings are held fixed for data collection and recorded in `config.json`;
 they do not affect the directory name. Rerunning the same declared parameters
 and seed replaces that directory's known artifacts. Other files and older-layout
 directories are preserved. No hashes or random run IDs appear in directory names.
-Terminal output shows the circuit path once at the beginning, progress counters
-without repeated paths, and the results path once at the end. JSONL retains
-complete metadata on every event.
+Terminal output shows the circuit path once at the beginning, generation
+updates, and the results path once at the end. Baseline, improvement, checkpoint
+and summary events are recorded in JSONL without extra terminal lines. JSONL
+retains complete metadata on every event.
 
 - `config.json`: effective configuration including seed and input/tool identities.
 - `progress.jsonl`: flushed configuration, baseline (weighted mode), improvement,

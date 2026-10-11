@@ -202,6 +202,9 @@ class NSGA2Tests(unittest.TestCase):
                 with patch.object(abc, "evaluate_recipe", side_effect=self.fake_evaluator):
                     result = e.run("unused.aig", self.config(), progress=progress)
                 self.assertTrue(all(call.kwargs.get("flush") for call in terminal.call_args_list))
+                lines = [call.args[0] for call in terminal.call_args_list]
+                self.assertEqual(len(lines), 5)  # Circuit header plus generations 0-3.
+                self.assertTrue(all(line.startswith("nsga2 generation ") for line in lines[1:]))
             self.assertEqual(events[0]["event"], "configuration")
             self.assertEqual(events[0]["config"], result["config"])
             self.assertEqual([p["generation"] for p in events if p["event"] == "generation"], [0, 1, 2, 3])

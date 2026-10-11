@@ -54,15 +54,14 @@ class ProgressLogger:
             circuit = event["circuit"].removeprefix("repo/")
             print(f"{event['algorithm']}: circuit={circuit}", flush=True)
             return
+        if event["event"] != "generation":
+            return
         best = event["best"]
         qor = f"LUTs={best['lut_count']} levels={best['lut_levels']}" if best else "LUTs=n/a levels=n/a"
         mode = event["optimization_mode"]
         if mode == "weighted_sum":
             fitness = event["weighted_fitness"]
             selection = f"fitness={fitness:.8g}" if fitness is not None else "fitness=n/a"
-            if event["event"] == "baseline":
-                baseline = event["baseline_qor"]
-                selection += f"; baseline LUTs={baseline['lut_count']} levels={baseline['lut_levels']}"
         else:
             selection = f"pareto={event['pareto_size']}"
         percent = event["budget_utilization_percent"]

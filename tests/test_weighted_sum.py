@@ -240,6 +240,11 @@ class WeightedSumTests(unittest.TestCase):
                     self.assertEqual(events[-1]["best"], result["best"])
                     self.assertEqual(events[-1]["tool_calls"], 4)
                     self.assertIn(f"mode={mode}", process.stdout)
+                    self.assertNotIn("nsga2 baseline", process.stdout)
+                    self.assertNotIn("nsga2 improvement", process.stdout)
+                    self.assertNotIn("nsga2 checkpoint", process.stdout)
+                    self.assertNotIn("nsga2 summary", process.stdout)
+                    self.assertNotIn("LUTs=n/a", process.stdout)
                     if mode == "weighted_sum":
                         self.assertEqual(result["status"], "budget_exhausted")
                         self.assertEqual(tuple(result["baseline_qor"].values()), baseline)
