@@ -2,8 +2,7 @@
 # Adapted from HEBO/BOiLS; BSD-3-Clause terms and disclaimer in LICENSE.
 """CPU exact GP with normalized fixed-order string-subsequence features.
 
-The explicit feature map equals seq_kernel_fast.py's DP with a strictly
-upper-triangular decay matrix. It avoids materializing all pairs of strings.
+The explicit feature map equals seq_kernel_fast.py's fixed-order DP. It avoids materializing all pairs of strings.
 """
 
 from itertools import combinations
@@ -20,11 +19,11 @@ class StringSubsequenceKernel(torch.nn.Module):
         super().__init__()
         if not 1 <= order <= min(3, sequence_length):
             raise ValueError("SSK order must be in [1, min(3, sequence_length)]")
-        if not 0 < gap_decay < 1 or not 0 < match_decay <= 1:
+        if not 0 <= gap_decay <= 1 or not 0 < match_decay <= 1:
             raise ValueError("invalid SSK decay")
         self.sequence_length, self.alphabet_size, self.order = sequence_length, alphabet_size, order
         self.match_decay = match_decay
-        self.raw_gap = torch.nn.Parameter(torch.tensor(math.log(gap_decay / (1-gap_decay)), dtype=DTYPE))
+        self.raw_gap = torch.nn.Parameter(torch.tensor(gap_decay, dtype=DTYPE))
         indices = torch.tensor(list(combinations(range(sequence_length), order)), dtype=torch.long)
         self.register_buffer("indices", indices)
         self.register_buffer("gaps", (indices[:, -1] - indices[:, 0] + 1 - order).to(DTYPE))
@@ -35,7 +34,7 @@ class StringSubsequenceKernel(torch.nn.Module):
         if x.ndim != 2 or x.shape[1] != self.sequence_length or (x < 0).any() or (x >= self.alphabet_size).any():
             raise ValueError("SSK input must be a matrix of fixed-length action indices")
         codes = (x[:, self.indices] * self.powers).sum(-1)
-        weights = self.raw_gap.sigmoid().pow(self.gaps) * self.match_decay ** self.order
+        weights = self.raw_gap.pow(self.gaps) * self.match_decay ** self.order
         features = torch.zeros((len(x), self.alphabet_size ** self.order), dtype=DTYPE)
         features = features.scatter_add(1, codes, weights.expand(len(x), -1))
         return features / features.norm(dim=1, keepdim=True).clamp_min(1e-15)
@@ -46,6 +45,31 @@ class StringSubsequenceKernel(torch.nn.Module):
         return left @ right.T
 
 
+    def diagonal(self, x):
+        return torch.ones(len(x), dtype=DTYPE)
+
+
+class TransformedOverlapKernel(torch.nn.Module):
+    """Upstream's non-ARD transformed_overlap kernel for guided restarts."""
+
+    def __init__(self):
+        super().__init__()
+        initial = (math.sqrt(0.01*0.5)-0.01) / (2.5-0.01)
+        self.raw_lengthscale = torch.nn.Parameter(torch.tensor(math.log(initial/(1-initial)), dtype=DTYPE))
+
+    @property
+    def lengthscale(self):
+        return 0.01 + 2.49 * self.raw_lengthscale.sigmoid()
+
+    def forward(self, x, y=None):
+        x = torch.as_tensor(x, dtype=torch.long)
+        y = x if y is None else torch.as_tensor(y, dtype=torch.long)
+        return torch.exp(self.lengthscale * (x[:, None] == y[None, :]).to(DTYPE).mean(-1))
+
+    def diagonal(self, x):
+        return self.lengthscale.exp().expand(len(x))
+
+
 def rank_standardise(y):
     """Upstream's maximum rank for ties, then Gaussian quantiles."""
     y = torch.as_tensor(y, dtype=DTYPE)
@@ -54,12 +78,13 @@ def rank_standardise(y):
 
 
 class ExactSSKGP(torch.nn.Module):
-    def __init__(self, sequence_length, order=3):
+    def __init__(self, sequence_length, order=3, *, kernel=None):
         super().__init__()
-        self.kernel = StringSubsequenceKernel(sequence_length, order=min(order, sequence_length))
+        self.kernel = kernel if kernel is not None else StringSubsequenceKernel(sequence_length, order=min(order, sequence_length))
         self.mean = torch.nn.Parameter(torch.zeros((), dtype=DTYPE))
-        self.raw_scale = torch.nn.Parameter(torch.zeros((), dtype=DTYPE))
-        self.raw_noise = torch.nn.Parameter(torch.tensor(-3., dtype=DTYPE))
+        self.raw_scale = torch.nn.Parameter(torch.tensor(math.log(1/8), dtype=DTYPE))
+        initial_noise = (0.005-1e-6) / (0.1-1e-6)
+        self.raw_noise = torch.nn.Parameter(torch.tensor(math.log(initial_noise/(1-initial_noise)), dtype=DTYPE))
 
     @property
     def scale(self):
@@ -69,9 +94,12 @@ class ExactSSKGP(torch.nn.Module):
     def noise(self):
         return 1e-6 + (0.1 - 1e-6) * self.raw_noise.sigmoid()
 
-    def fit(self, x, y, steps=50):
+    def fit(self, x, y, steps=500, *, rank_targets=True, standardise=True):
         self.x = torch.as_tensor(x, dtype=torch.long)
-        self.y = rank_standardise(y)
+        self.y = rank_standardise(y) if rank_targets else torch.as_tensor(y, dtype=DTYPE)
+        if standardise:
+            std = self.y.std() if len(self.y) > 1 else torch.zeros((), dtype=DTYPE)
+            self.y = (self.y-self.y.mean()) / (std+1e-8)
         identity = torch.eye(len(self.x), dtype=DTYPE)
         optimizer = torch.optim.Adam(self.parameters(), lr=0.03)
         for _ in range(steps):
@@ -80,31 +108,36 @@ class ExactSSKGP(torch.nn.Module):
             chol = torch.linalg.cholesky(covariance)
             residual = self.y - self.mean
             alpha = torch.cholesky_solve(residual[:, None], chol).squeeze(1)
-            loss = 0.5 * residual.dot(alpha) + chol.diag().log().sum()
+            loss = (0.5 * residual.dot(alpha) + chol.diag().log().sum()) / len(self.x)
             if not torch.isfinite(loss):
                 raise ValueError("Nonfinite SSK GP marginal likelihood")
             loss.backward()
             optimizer.step()
+            if isinstance(self.kernel, StringSubsequenceKernel):
+                # Paper: projected Adam for the decay parameter in [0,1].
+                with torch.no_grad():
+                    self.kernel.raw_gap.clamp_(0, 1)
         with torch.no_grad():
-            self.train_features = self.kernel.features(self.x)
-            covariance = self.scale * (self.train_features @ self.train_features.T) + (self.noise + 1e-8) * identity
+            self.train_features = self.kernel.features(self.x) if isinstance(self.kernel, StringSubsequenceKernel) else None
+            covariance = self.scale * self.kernel(self.x) + (self.noise + 1e-8) * identity
             self.chol = torch.linalg.cholesky(covariance)
             self.alpha = torch.cholesky_solve((self.y-self.mean)[:, None], self.chol).squeeze(1)
         return self
 
     @torch.no_grad()
     def predict(self, x):
-        cross = self.scale * (self.kernel.features(x) @ self.train_features.T)
+        cross = self.scale * (self.kernel.features(x) @ self.train_features.T
+                              if self.train_features is not None else self.kernel(x, self.x))
         mean = self.mean + cross @ self.alpha
         projected = torch.linalg.solve_triangular(self.chol, cross.T, upper=False)
-        variance = (self.scale - projected.square().sum(0)).clamp_min(1e-12)
+        variance = (self.scale * self.kernel.diagonal(x) - projected.square().sum(0)).clamp_min(1e-12)
         return mean, variance
 
     @torch.no_grad()
     def acquisition(self, x, incumbent, kind="ei"):
         mean, variance = self.predict(x)
         if kind == "lcb":
-            return -mean + 1.96 * (variance + self.noise).sqrt()
+            return -mean + 1.96 * variance.sqrt()
         target = self.predict([incumbent])[0][0]
         std = variance.sqrt()
         improvement = target - mean

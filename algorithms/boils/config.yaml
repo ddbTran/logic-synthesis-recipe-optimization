@@ -1,7 +1,7 @@
 {
   "recipe_length": 20,
   "seed": 0,
-  "max_tool_calls": null,
+  "max_tool_calls": 200,
   "checkpoint_interval": 200,
   "optimization_mode": "weighted_sum",
   "lut_k": 6,
@@ -11,12 +11,14 @@
   "timeout": 60,
   "n_initial": 20,
   "ssk_order": 3,
-  "gp_training_steps": 50,
-  "max_training_points": 128,
-  "candidate_pool_size": 128,
-  "acquisition_steps": 10,
-  "tr_initial_radius": 20,
+  "gp_training_steps": 500,
+  "max_training_points": null,
+  "candidate_pool_size": null,
+  "acquisition_steps": 200,
+  "tr_initial_radius": null,
   "tr_success_tolerance": 3,
   "tr_failure_tolerance": 40,
-  "tr_multiplier": 1.5
+  "tr_multiplier": 1.5,
+  "restart_gp_training_steps": 400,
+  "standardise": true
 }

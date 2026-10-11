@@ -7,7 +7,7 @@ import csv
 import json
 from pathlib import Path
 import shutil
-import random
+import numpy as np
 import subprocess
 import sys
 import tempfile
@@ -19,8 +19,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from algorithms.boils import engine as e
-from algorithms.boils.optimizer import Optimizer, TrustRegion, hamming
-from algorithms.boils.surrogate import StringSubsequenceKernel, ExactSSKGP, rank_standardise
+from algorithms.boils.optimizer import Optimizer, TrustRegion, hamming, latin_hypercube_recipes
+from algorithms.boils.surrogate import StringSubsequenceKernel, ExactSSKGP, TransformedOverlapKernel, rank_standardise
 
 
 class BoilsTests(unittest.TestCase):
@@ -38,7 +38,8 @@ class BoilsTests(unittest.TestCase):
     def config(self, **kwargs):
         return replace(e.Config(max_tool_calls=9, recipe_length=3, n_initial=3,
                                 gp_training_steps=3, candidate_pool_size=8,
-                                acquisition_steps=1, checkpoint_interval=3), **kwargs)
+                                acquisition_steps=1, checkpoint_interval=3, tr_initial_radius=3,
+                                restart_gp_training_steps=3), **kwargs)
 
     def evaluator(self):
         def evaluate(circuit, recipe, *, budget, **kwargs):
@@ -100,12 +101,14 @@ class BoilsTests(unittest.TestCase):
                                   torch.tensor([0., 0., 0.6744897501960817], dtype=torch.float64))
 
     def test_acquisition_selects_maximum_and_respects_region(self):
-        c = self.config(acquisition_steps=0, tr_initial_radius=1)
+        c = self.config(acquisition_steps=0)
         optimizer = Optimizer(c)
         seen = {}
         for r, v in [((0, 0, 0), 0.1), ((1, 1, 1), 0.5), ((2, 2, 2), 0.9)]:
             seen[r] = v
             optimizer.observe(r, v, seen)
+        optimizer.pending.clear()
+        optimizer.region.radius = 1
         class Acquisition:
             def acquisition(self, recipes, incumbent):
                 self_recipes.extend(recipes)
@@ -116,21 +119,46 @@ class BoilsTests(unittest.TestCase):
         self.assertEqual(sum(selected), max(map(sum, self_recipes)))
         self.assertEqual(hamming(selected, (0, 0, 0)), 1)
         self.assertNotIn(selected, seen)
-        for _ in range(20):
-            self.assertEqual(hamming(optimizer.random_recipe((0, 0, 0)), (0, 0, 0)), 1)
+        distances = [hamming(optimizer.random_recipe((0, 0, 0)), (0, 0, 0)) for _ in range(100)]
+        self.assertEqual(set(distances), {0, 1})
 
-    def test_initial_sampling_and_bounded_training_keep_incumbent(self):
-        config = self.config(max_training_points=3)
+    def test_three_random_neighbor_walks_accept_only_improvements(self):
+        optimizer = Optimizer(self.config(acquisition_steps=2))
+        center, improving, worse = (0, 0, 0), (5, 0, 0), (1, 0, 0)
+        optimizer.local = [(center, 0.1), ((2, 2, 2), 0.5), ((3, 3, 3), 0.9)]
+        optimizer.pending.clear()
+        optimizer.region.radius = 1
+        class Acquisition:
+            def acquisition(self, recipes, incumbent):
+                return torch.tensor([sum(r) for r in recipes], dtype=torch.float64)
+        with patch.object(optimizer, "fit", return_value=Acquisition()), \
+             patch.object(optimizer, "neighbor", side_effect=[improving, worse]*3) as neighbor:
+            result = optimizer.suggest({r: v for r, v in optimizer.local})
+        self.assertEqual(result, improving)
+        self.assertEqual([call.args[0] for call in neighbor.call_args_list], [center, improving]*3)
+        self.assertEqual(hamming(result, center), 1)
+
+    def test_lhs_initialization_and_full_training_history(self):
+        config = self.config()
         optimizer = Optimizer(config)
-        rng = random.Random(config.seed)
-        self.assertEqual(optimizer.suggest({}), tuple(rng.randrange(16) for _ in range(3)))
-        observations = [((i, i, i), float(i)) for i in range(6)]
+        expected = latin_hypercube_recipes(config.n_initial, config.recipe_length,
+                                          np.random.RandomState(config.seed))
+        self.assertEqual(optimizer.suggest({}), expected[0])
+        observations = [((i % 16, (i//16) % 16, 0), float(i)) for i in range(150)]
         with patch("algorithms.boils.optimizer.ExactSSKGP") as model:
             optimizer.fit(observations)
         recipes, values, steps = model.return_value.fit.call_args.args
-        self.assertEqual(recipes, [(0, 0, 0), (4, 4, 4), (5, 5, 5)])
-        self.assertEqual(values, [0., 4., 5.])
+        self.assertEqual(recipes, [p[0] for p in observations])
+        self.assertEqual(values, [p[1] for p in observations])
         self.assertEqual(steps, config.gp_training_steps)
+        self.assertEqual(model.return_value.fit.call_args.kwargs,
+                         {"rank_targets": True, "standardise": True})
+        with patch("algorithms.boils.optimizer.ExactSSKGP") as model:
+            optimizer.fit(observations, restart=True)
+        self.assertIsInstance(model.call_args.kwargs["kernel"], TransformedOverlapKernel)
+        self.assertEqual(model.return_value.fit.call_args.args[2], config.restart_gp_training_steps)
+        self.assertEqual(model.return_value.fit.call_args.kwargs,
+                         {"rank_targets": False, "standardise": False})
 
     def test_surrogate_failure_is_reported_without_kernel_fallback(self):
         with patch.object(e.abc, "evaluate_recipe", side_effect=self.evaluator()), \
@@ -150,10 +178,10 @@ class BoilsTests(unittest.TestCase):
         region.update(1, 0.8)
         region.update(1, 0.8)
         self.assertEqual(region.radius, 2)
-        region.radius = 1
         self.assertFalse(region.update(1, 0.8))
         self.assertTrue(region.update(1, 0.8))
-        optimizer = Optimizer(self.config(n_initial=1, tr_initial_radius=1, tr_failure_tolerance=1))
+        self.assertEqual(region.radius, 1)
+        optimizer = Optimizer(self.config(n_initial=1, tr_initial_radius=2, tr_failure_tolerance=1))
         seen = {(0, 0, 0): 1}
         optimizer.observe((0, 0, 0), 1, seen)
         seen[(1, 0, 0)] = 2
@@ -239,12 +267,108 @@ class BoilsTests(unittest.TestCase):
             e.run(self.circuit, self.config())
         self.assertEqual(torch.get_num_threads(), 1)
 
+    def test_200_uncached_calls_include_initialization_and_free_cache_hits(self):
+        # Run the real proposal/region loop; replace only GP math and ABC with
+        # spies to check the full 200-call horizon without an expensive run.
+        fitted = []
+        class Surrogate:
+            def fit(self, *args, **kwargs):
+                fitted.append((len(args[0]), args[2], kwargs))
+                return self
+            def acquisition(self, recipes, incumbent, kind="ei"):
+                return torch.tensor([sum(r) for r in recipes], dtype=torch.float64)
+        normal_suggest = Optimizer.suggest
+        duplicate = None
+        def suggest(optimizer, seen):
+            nonlocal duplicate
+            if duplicate is not None:
+                proposal, duplicate = duplicate, None
+                return proposal
+            proposal = normal_suggest(optimizer, seen)
+            duplicate = proposal
+            return proposal
+        config = e.Config()
+        with patch.object(e.abc, "evaluate_recipe", side_effect=self.evaluator()) as launch, \
+             patch("algorithms.boils.optimizer.ExactSSKGP", return_value=Surrogate()) as model, \
+             patch.object(Optimizer, "suggest", suggest):
+            result = e.run(self.circuit, config)
+        self.assertEqual(result["tool_calls"], 200)
+        self.assertEqual(result["baseline_tool_calls"], 1)
+        self.assertEqual(launch.call_count, 201)
+        self.assertEqual(result["cache_hits"], 199)
+        self.assertEqual(result["candidate_attempts"], 399)
+        self.assertEqual(len(result["observations"]), 200)
+        self.assertEqual(len({tuple(p["recipe"]) for p in result["observations"]}), 200)
+        self.assertEqual(result["surrogate_fits"], 180)
+        self.assertEqual(result["status"], "budget_exhausted")
+        self.assertEqual(model.call_count, 180)
+        self.assertEqual([size for size, _, _ in fitted], list(range(20, 200)))
+        self.assertTrue(all(steps == 500 and flags == {"rank_targets": True, "standardise": True}
+                            for _, steps, flags in fitted))
+
+    def test_gp_target_standardization_and_initial_hypers(self):
+        gp = ExactSSKGP(3)
+        self.assertAlmostEqual(float(gp.scale.detach()), 1)
+        self.assertAlmostEqual(float(gp.noise.detach()), 0.005)
+        x = [(0, 0, 0), (1, 1, 1), (2, 2, 2)]
+        targets = [0.1, 0.4, 0.9]
+        gp.fit(x, targets, steps=1)
+        expected = rank_standardise(targets)
+        expected = (expected-expected.mean()) / (expected.std()+1e-8)
+        torch.testing.assert_close(gp.y, expected)
+        self.assertAlmostEqual(float(gp.y.mean()), 0)
+        self.assertAlmostEqual(float(gp.y.std()), 1, places=7)
+        gp.fit(x, [1, 1, 1], steps=1)
+        torch.testing.assert_close(gp.y, torch.zeros(3, dtype=torch.float64))
+        gp.fit(x[:1], targets[:1], steps=1)
+        self.assertTrue(torch.isfinite(gp.y).all())
+        auxiliary = ExactSSKGP(3, kernel=TransformedOverlapKernel())
+        auxiliary.fit(x, targets, steps=1, rank_targets=False, standardise=False)
+        torch.testing.assert_close(auxiliary.y, torch.tensor(targets, dtype=torch.float64))
+        mean, variance = auxiliary.predict(x)
+        self.assertTrue(torch.isfinite(mean).all())
+        self.assertTrue((variance > 0).all())
+        torch.testing.assert_close(auxiliary.acquisition(x, x[0], "lcb"), -mean+1.96*variance.sqrt())
+
+    def test_ssk_matches_upstream_dynamic_program(self):
+        # Reference recurrence from local seq_kernel_fast.py: exponents start
+        # at ONE outside the strict upper triangle, so there is no mask bug.
+        strings = torch.tensor([[0, 0, 1, 2, 0], [0, 1, 0, 2, 1], [3, 3, 3, 3, 3]])
+        length = strings.shape[1]
+        triangle = torch.triu(torch.ones(length, length, dtype=torch.float64), diagonal=1)
+        exponent = torch.ones(length, length, dtype=torch.long)
+        for i in range(length-1):
+            exponent[i, i+1:] = torch.arange(length-i-1)
+        for gap in (0.0, 0.2, 0.5, 0.9, 1.0):
+            decay = (gap*triangle).pow(exponent)
+            self.assertTrue((torch.tril(decay) == 0).all())
+            gram = torch.empty(3, 3, dtype=torch.float64)
+            for i, x in enumerate(strings):
+                for j, y in enumerate(strings):
+                    similarity = (x[:, None] == y[None, :]).double()
+                    value = torch.ones(length, length, dtype=torch.float64)
+                    for _ in range(2):
+                        value = decay.T @ (0.8**2*similarity*value) @ decay
+                    gram[i, j] = 0.8**2*(similarity*value).sum()
+            diagonal = gram.diag()
+            expected = gram / (diagonal[:, None]*diagonal[None, :]).sqrt()
+            kernel = StringSubsequenceKernel(length, alphabet_size=4, order=3, gap_decay=gap)
+            torch.testing.assert_close(kernel(strings), expected)
+
     def test_config_validation(self):
-        with self.assertRaisesRegex(ValueError, "explicit"):
-            e.load_config()
+        self.assertEqual(e.load_config(), e.Config())
+        defaults = e.load_config()
+        self.assertEqual((defaults.max_tool_calls, defaults.n_initial, defaults.recipe_length,
+                          defaults.gp_training_steps, defaults.restart_gp_training_steps,
+                          defaults.acquisition_steps), (200, 20, 20, 500, 400, 200))
+        self.assertTrue(defaults.standardise)
+        self.assertIsNone(defaults.max_training_points)
+        optimizer = Optimizer(defaults)
+        self.assertEqual(optimizer.initial_radius, 13)
+        self.assertEqual(optimizer.n_candidates, 2000)
         self.assertEqual(e.load_config(max_tool_calls=9), e.Config(max_tool_calls=9))
         for key, value in (("n_initial", 0), ("ssk_order", 4), ("gp_training_steps", 0),
-                           ("max_training_points", 1), ("candidate_pool_size", True),
+                           ("max_training_points", 128), ("candidate_pool_size", True), ("standardise", 1),
                            ("tr_multiplier", 1), ("tr_multiplier", float("nan")),
                            ("optimization_mode", "pareto")):
             with self.subTest(key=key), self.assertRaises(ValueError):

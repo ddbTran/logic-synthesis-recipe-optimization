@@ -14,10 +14,10 @@ def main():
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
     parser.add_argument("--seed", type=int, help="Experiment seed (default: 0)")
-    parser.add_argument("--max-tool-calls", type=int, help="ABC sequence evaluation invocation budget override; BOiLS requires an explicit budget")
+    parser.add_argument("--max-tool-calls", type=int, help="ABC sequence evaluation invocation budget override; BOiLS defaults to 200")
     parser.add_argument("--config", help="Algorithm JSON-subset YAML configuration")
     for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval", "episodes",
-                 "n-initial", "ssk-order", "gp-training-steps", "max-training-points",
+                 "n-initial", "ssk-order", "gp-training-steps", "restart-gp-training-steps", "max-training-points",
                  "candidate-pool-size", "acquisition-steps", "tr-initial-radius",
                  "tr-success-tolerance", "tr-failure-tolerance"):
         parser.add_argument("--" + name, type=int)
@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--actor-hidden", type=int, nargs=2, metavar=("H1", "H2"))
     parser.add_argument("--critic-hidden", type=int, nargs=1, metavar="H")
+    parser.add_argument("--standardise", action=argparse.BooleanOptionalAction, default=None,
+                        help="BOiLS: standardize Gaussian rank targets (default: enabled)")
     parser.add_argument("--objective", help="NSGA-II: lut_count,lut_levels (both minimized)")
     args = parser.parse_args()
     if args.max_tool_calls is not None and args.max_tool_calls < 0:

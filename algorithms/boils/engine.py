@@ -21,27 +21,34 @@ from .optimizer import Optimizer
 
 @dataclass(frozen=True)
 class Config(SharedConfig):
-    max_tool_calls: int | None = None
+    max_tool_calls: int = 200
     n_initial: int = 20
     ssk_order: int = 3
-    gp_training_steps: int = 50
-    max_training_points: int = 128
-    candidate_pool_size: int = 128
-    acquisition_steps: int = 10
-    tr_initial_radius: int = 20
+    gp_training_steps: int = 500
+    restart_gp_training_steps: int = 400
+    standardise: bool = True
+    max_training_points: None = None
+    candidate_pool_size: int | None = None
+    acquisition_steps: int = 200
+    tr_initial_radius: int | None = None
     tr_success_tolerance: int = 3
     tr_failure_tolerance: int = 40
     tr_multiplier: float = 1.5
 
     def __post_init__(self):
-        if self.max_tool_calls is None:
-            raise ValueError("BOiLS requires explicit max_tool_calls in config or --max-tool-calls")
+        if self.max_training_points is not None:
+            raise ValueError("BOiLS uses full trust-region history; max_training_points must be null")
+        if type(self.standardise) is not bool:
+            raise ValueError("standardise must be a boolean")
+        for name in ("candidate_pool_size", "tr_initial_radius"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value < 1):
+                raise ValueError(f"{name} must be null or an integer >= 1")
         if self.optimization_mode != "weighted_sum":
             raise ValueError("BOiLS supports only optimization_mode weighted_sum")
         super().__post_init__()
         for name, minimum in (("n_initial", 1), ("ssk_order", 1), ("gp_training_steps", 1),
-                              ("max_training_points", 2), ("candidate_pool_size", 1),
-                              ("acquisition_steps", 0), ("tr_initial_radius", 1),
+                              ("restart_gp_training_steps", 1), ("acquisition_steps", 0),
                               ("tr_success_tolerance", 1), ("tr_failure_tolerance", 1)):
             if type(getattr(self, name)) is not int or getattr(self, name) < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -131,13 +138,15 @@ def _run(circuit, config, *, progress=None):
             if recipe is None:
                 status = "search_space_exhausted"
                 break
+            cached = recipe in evaluator.cache
             member = evaluator.evaluate(recipe)
-            iteration += 1
+            iteration = evaluator.evaluations
             if best is None or solution_key(member) < solution_key(best):
                 best = member
                 emit("improvement")
             emit("checkpoint")
-            optimizer.observe(recipe, member["weighted_fitness"], evaluator.cache)
+            if not cached:
+                optimizer.observe(recipe, member["weighted_fitness"], evaluator.cache)
             emit("generation")
     except abc.BudgetExceeded as exc:
         if budget.tool_calls is None or baseline_budget.tool_calls is None:
@@ -162,11 +171,16 @@ def _run(circuit, config, *, progress=None):
         best=best if status != "failed" else None,
         weighted_fitness=best["weighted_fitness"] if best and status != "failed" else None,
         provenance={
-            "variant": "boils-exact-ssk-ei-cpu-v1",
+            "variant": "boils-upstream-settings-ssk-ei-cpu-v2",
             "implementation": "adapted from local HEBO/BOiLS; see algorithms/boils/PROVENANCE.md",
             "upstream_commit": "ee6112d39d1a9e9703fecaf9057193e1ec9dae72",
             "torch": torch.__version__, "device": "cpu", "dtype": "float64",
             "torch_threads": torch.get_num_threads(),
+            "kernel": "ssk", "acquisition": "augmented_ei",
+            "ard_requested_upstream": True, "ssk_has_ard": False,
+            "initialization": "latin-hypercube-onehot-argmax",
+            "effective_initial_radius": optimizer.initial_radius,
+            "restart_candidate_count": optimizer.n_candidates,
             "optimizer_sha256": fingerprint(Path(__file__).with_name("optimizer.py")),
             "surrogate_sha256": fingerprint(Path(__file__).with_name("surrogate.py")),
             "python": platform.python_version(), "engine_sha256": fingerprint(__file__),
