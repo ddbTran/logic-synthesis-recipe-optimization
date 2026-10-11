@@ -54,7 +54,7 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(result["evaluations"], result["successful_evaluations"])
         self.assertEqual(result["abc_process_invocations"], 3)
         self.assertEqual(result["best_fitness"], checkpoints[-1]["best_fitness"])
-        # The scheduled event occurs before generation 0 finishes.
+        # The scheduled event occurs before candidate generation 1 finishes.
         self.assertLess(events.index(checkpoints[0]), next(
             i for i, event in enumerate(events) if event["event"] == "generation"))
 

@@ -164,8 +164,9 @@ class NSGA2Tests(unittest.TestCase):
             self.assertGreaterEqual(float(row["runtime_seconds"]), 0)
 
     def test_configuration(self):
-        self.assertEqual(asdict(e.load_config()), asdict(e.Config()))
-        config = e.load_config()
+        stored = json.loads(Path(e.__file__).with_name("config.yaml").read_text())
+        self.assertEqual(asdict(e.load_config()), asdict(e.Config(**stored)))
+        config = e.Config()
         self.assertEqual((config.seed, config.population_size, config.offspring_count,
                           config.generations, config.recipe_length, config.max_tool_calls,
                           config.lut_k), (0, 40, 40, 99, 20, 4000, 6))
@@ -203,17 +204,17 @@ class NSGA2Tests(unittest.TestCase):
                     result = e.run("unused.aig", self.config(), progress=progress)
                 self.assertTrue(all(call.kwargs.get("flush") for call in terminal.call_args_list))
                 lines = [call.args[0] for call in terminal.call_args_list]
-                self.assertEqual(len(lines), 5)  # Circuit header plus generations 0-3.
+                self.assertEqual(len(lines), 5)  # Circuit header plus candidate generations 1-4 (Pareto has no baseline).
                 self.assertTrue(all(line.startswith("nsga2 generation ") for line in lines[1:]))
             self.assertEqual(events[0]["event"], "configuration")
             self.assertEqual(events[0]["config"], result["config"])
-            self.assertEqual([p["generation"] for p in events if p["event"] == "generation"], [0, 1, 2, 3])
+            self.assertEqual([p["generation"] for p in events if p["event"] == "generation"], [1, 2, 3, 4])
             self.assertEqual(events[1]["event"], "improvement")
             self.assertEqual(events[1]["tool_calls"], 1)
             for event in events:
                 self.assertEqual(event["budget_utilization_percent"], event["tool_calls"])
                 self.assertGreaterEqual(event["elapsed_seconds"], 0)
-                self.assertEqual(event["generations"], 3)
+                self.assertEqual(event["generations"], 4)
             final = events[-1]
             self.assertEqual(final["event"], "summary")
             for key in ("tool_calls", "cache_hits", "status", "best"):
@@ -249,7 +250,7 @@ class NSGA2Tests(unittest.TestCase):
                 self.assertEqual(events[-1]["budget_utilization_percent"], 100)
                 self.assertEqual(events[-1]["best"], result["best"])
                 self.assertIn("ABC calls=4/4 (100.00%)", process.stdout)
-                self.assertIn("generation 1/1", process.stdout)
+                self.assertIn("generation 2/2", process.stdout)
                 lines = process.stdout.splitlines()
                 self.assertIn("circuit=", lines[0])
                 self.assertIn("results=", lines[-1])

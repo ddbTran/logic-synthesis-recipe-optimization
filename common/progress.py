@@ -54,19 +54,22 @@ class ProgressLogger:
             circuit = event["circuit"].removeprefix("repo/")
             print(f"{event['algorithm']}: circuit={circuit}", flush=True)
             return
-        if event["event"] != "generation":
+        if event["event"] not in ("baseline", "generation"):
             return
-        best = event["best"]
+        is_baseline = event["event"] == "baseline"
+        best = event["baseline_qor"] if is_baseline else event["best"]
         qor = f"LUTs={best['lut_count']} levels={best['lut_levels']}" if best else "LUTs=n/a levels=n/a"
         mode = event["optimization_mode"]
-        if mode == "weighted_sum":
+        if is_baseline:
+            selection = "original circuit"
+        elif mode == "weighted_sum":
             fitness = event["weighted_fitness"]
             selection = f"fitness={fitness:.8g}" if fitness is not None else "fitness=n/a"
         else:
             selection = f"pareto={event['pareto_size']}"
         percent = event["budget_utilization_percent"]
         utilization = f"{percent:.2f}%" if percent is not None else "unknown"
-        print(f"{event['algorithm']} {event['event']} {event['generation']}/{event['generations']}: "
+        print(f"{event['algorithm']} generation {event['generation']}/{event['generations']}: "
               f"mode={mode}; {qor}; {selection}; "
               f"ABC calls={event['tool_calls']}/{event['max_tool_calls']} ({utilization}); "
               f"cache_hits={event['cache_hits']}; elapsed={event['elapsed_seconds']:.3f}s; "

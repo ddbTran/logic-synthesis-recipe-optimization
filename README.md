@@ -143,10 +143,11 @@ python tests/test_nsga2.py
 python tests/smoke_abc.py --evaluator-only
 ```
 
-Defaults: seed 0, recipe length 20, population 40, offspring count 40,
+Python `Config` defaults: seed 0, recipe length 20, population 40, offspring count 40,
 99 offspring generations after initialization, crossover probability 0.9,
 per-gene mutation probability 0.05, LUT K=6, timeout 60 seconds,
-`yosys-abc`, and **4000 launched sequences**. CLI options override
+`yosys-abc`, and **4000 launched sequences**. CLI defaults come from [config.yaml](algorithms/nsga2/config.yaml), which may
+override the Python defaults. CLI options override
 [config.yaml](algorithms/nsga2/config.yaml); `--config PATH` accepts JSON syntax,
 a YAML subset parsed by the standard library (no PyYAML dependency). Unknown
 keys and invalid settings fail before evaluation. `--timeout none` (or JSON
@@ -171,9 +172,13 @@ they do not affect the directory name. Rerunning the same declared parameters
 and seed replaces that directory's known artifacts. Other files and older-layout
 directories are preserved. No hashes or random run IDs appear in directory names.
 Terminal output shows the circuit path once at the beginning, generation
-updates, and the results path once at the end. Baseline, improvement, checkpoint
-and summary events are recorded in JSONL without extra terminal lines. JSONL
-retains complete metadata on every event.
+updates, and the results path once at the end. Generation 0 displays the measured
+original circuit `print_stats` QoR in weighted mode, before any recipe actions
+(empty recipe with the existing LUT mapping). Generation 1 is the initial
+candidate population, followed by the configured offspring generations. Pareto
+mode starts at generation 1 because it performs no baseline evaluation.
+Improvement, checkpoint and summary events are recorded in JSONL without extra
+terminal lines. JSONL retains complete metadata on every event.
 
 - `config.json`: effective configuration including seed and input/tool identities.
 - `progress.jsonl`: flushed configuration, baseline (weighted mode), improvement,

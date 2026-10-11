@@ -118,7 +118,7 @@ class ExperimentTests(unittest.TestCase):
             self.assertTrue((directory / "result.json").exists())
 
     def test_cli_reruns_clear_success_before_execution_and_keep_effective_config(self):
-        config = e.Config(population_size=2, offspring_count=2, generations=0, max_tool_calls=3)
+        config = e.load_config(population_size=2, offspring_count=2, generations=0, max_tool_calls=3)
         experiment = self.describe(config)
         argv = ["run.py", "--algorithm", "nsga2", "--circuit", str(self.circuit),
                 "--population-size", "2", "--offspring-count", "2", "--generations", "0", "--max-tool-calls", "3"]

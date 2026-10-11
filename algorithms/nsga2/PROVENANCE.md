@@ -48,6 +48,11 @@ In Pareto mode, already evaluated offspring remain in the archive if a
 generation stops early.
 Generation count means offspring generations **after** initialization; offspring
 count is configurable independently of population size, including odd counts.
+Progress labels reserve generation 0 for the original circuit’s `print_stats` QoR (empty recipe, existing
+LUT mapping) in weighted mode, generation
+1 for initialization, and 2 through `generations + 1` for offspring. Pareto mode
+starts at 1 without adding a baseline invocation. Progress `generations` is the
+last display index; `offspring_generations` retains the configured search count.
 
 Use raw LUT count and levels; only `objective: lut_count,lut_levels` is supported.
 `optimization_mode: pareto` retains the two-objective NSGA-II search.
@@ -158,7 +163,7 @@ invocation counts remain JSON null and stop the run. Each launched sequence cost
 one tool call, including an empty baseline, failure or timeout. Recipe length and
 bundled commands do not affect the budget. Action completions are diagnostics.
 
-Defaults are seed 0, population 40, offspring 40, 99 offspring generations,
+Python `Config` defaults are seed 0, population 40, offspring 40, 99 offspring generations,
 recipe length 20, budget 4000, and 6-LUT mapping. Initialization plus offspring
 allows 40 + 40 * 99 = 4000 evaluation attempts; cache hits launch no ABC and do
 not consume calls. The runner streams generation updates to the terminal; `progress.jsonl`

@@ -221,7 +221,8 @@ def run(circuit, config, *, progress=None):
             calls = budget.tool_calls
             snapshot = {
                 "algorithm": "nsga2", "circuit": str(circuit),
-                "event": event, "generation": generation, "generations": config.generations,
+                "event": event, "generation": generation, "generations": config.generations + 1,
+                "offspring_generations": config.generations,
                 "optimization_mode": config.optimization_mode,
                 "weight_area": config.weight_area, "weight_delay": config.weight_delay,
                 "baseline_qor": baseline,
@@ -306,12 +307,13 @@ def run(circuit, config, *, progress=None):
                 raise ValueError("Baseline LUT count and LUT levels must be positive")
             emit("baseline", generation)
             emit("checkpoint", generation)
+        generation = 1
         population = [evaluate(tuple(rng.randrange(len(TRANSFORMS))
                                      for _ in range(config.recipe_length)))
                       for _ in range(config.population_size)]
         population = select_survivors(population, config.population_size, key=selection_key)
-        emit("generation", 0)
-        for generation in range(1, config.generations + 1):
+        emit("generation", generation)
+        for generation in range(2, config.generations + 2):
             offspring = []
             while len(offspring) < config.offspring_count:
                 a, b = (tournament(population, rng, key=selection_key),

@@ -219,7 +219,7 @@ class WeightedSumTests(unittest.TestCase):
                     self.assertEqual(metadata["abc_executable"]["resolved"], result["provenance"]["abc_executable"])
                     self.assertEqual(metadata["abc_executable"]["sha256"], result["provenance"]["abc_sha256"])
                     self.assertEqual(result["optimization_mode"], mode)
-                    self.assertEqual(result["config"], asdict(e.Config(optimization_mode=mode,
+                    self.assertEqual(result["config"], asdict(e.load_config(optimization_mode=mode,
                         weight_area=0.8, weight_delay=0.2, seed=7, population_size=2,
                         offspring_count=2, generations=1, max_tool_calls=4, mutation_rate=1)))
                     self.assertEqual(result["tool_calls"], 4)
@@ -245,6 +245,15 @@ class WeightedSumTests(unittest.TestCase):
                     self.assertNotIn("nsga2 checkpoint", process.stdout)
                     self.assertNotIn("nsga2 summary", process.stdout)
                     self.assertNotIn("LUTs=n/a", process.stdout)
+                    if mode == "weighted_sum":
+                        baseline_line, = (line for line in process.stdout.splitlines()
+                                          if "generation 0/2:" in line)
+                        self.assertIn(f"LUTs={baseline[0]} levels={baseline[1]}", baseline_line)
+                        self.assertNotIn("fitness=", baseline_line)
+                        self.assertIn("ABC calls=1/4", baseline_line)
+                        self.assertIn("original circuit", baseline_line)
+                    else:
+                        self.assertNotIn("generation 0/", process.stdout)
                     if mode == "weighted_sum":
                         self.assertEqual(result["status"], "budget_exhausted")
                         self.assertEqual(tuple(result["baseline_qor"].values()), baseline)
