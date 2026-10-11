@@ -1,4 +1,4 @@
-"""Research runner: NSGA-II, Greedy and DRiLLS integrated."""
+"""Research runner: NSGA-II, Greedy, DRiLLS and BOiLS integrated."""
 
 import argparse
 import sys
@@ -10,16 +10,19 @@ ALGORITHMS = (
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II, Greedy and DRiLLS integrated).")
+    parser = argparse.ArgumentParser(description="Logic synthesis recipe benchmark (NSGA-II, Greedy, DRiLLS and BOiLS integrated).")
     parser.add_argument("--algorithm", required=True, choices=ALGORITHMS)
     parser.add_argument("--circuit", required=True, help="Input circuit path")
     parser.add_argument("--seed", type=int, help="Experiment seed (default: 0)")
     parser.add_argument("--max-tool-calls", type=int, help="ABC sequence evaluation invocation budget override; BOiLS requires an explicit budget")
     parser.add_argument("--config", help="Algorithm JSON-subset YAML configuration")
-    for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval", "episodes"):
+    for name in ("recipe-length", "population-size", "offspring-count", "generations", "lut-k", "checkpoint-interval", "episodes",
+                 "n-initial", "ssk-order", "gp-training-steps", "max-training-points",
+                 "candidate-pool-size", "acquisition-steps", "tr-initial-radius",
+                 "tr-success-tolerance", "tr-failure-tolerance"):
         parser.add_argument("--" + name, type=int)
     for name in ("crossover-rate", "mutation-rate", "weight-area", "weight-delay", "gamma",
-                 "actor-learning-rate", "critic-learning-rate"):
+                 "actor-learning-rate", "critic-learning-rate", "tr-multiplier"):
         parser.add_argument("--" + name, type=float)
     parser.add_argument("--optimization-mode", choices=("pareto", "weighted_sum"),
                         default=argparse.SUPPRESS,
@@ -36,9 +39,11 @@ def main():
     args = parser.parse_args()
     if args.max_tool_calls is not None and args.max_tool_calls < 0:
         parser.error("--max-tool-calls must be nonnegative")
-    if args.algorithm in ("nsga2", "greedy", "drills"):
+    if args.algorithm in ("nsga2", "greedy", "drills", "boils"):
         from dataclasses import replace
-        if args.algorithm == "drills":
+        if args.algorithm == "boils":
+            from algorithms.boils.engine import load_config, run, write_results
+        elif args.algorithm == "drills":
             from algorithms.drills.engine import load_config, run, write_results
         elif args.algorithm == "greedy":
             from algorithms.greedy.engine import load_config, run, write_results

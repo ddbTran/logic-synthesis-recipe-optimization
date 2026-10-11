@@ -1,0 +1,22 @@
+{
+  "recipe_length": 20,
+  "seed": 0,
+  "max_tool_calls": null,
+  "checkpoint_interval": 200,
+  "optimization_mode": "weighted_sum",
+  "lut_k": 6,
+  "weight_area": 0.5,
+  "weight_delay": 0.5,
+  "abc_binary": "yosys-abc",
+  "timeout": 60,
+  "n_initial": 20,
+  "ssk_order": 3,
+  "gp_training_steps": 50,
+  "max_training_points": 128,
+  "candidate_pool_size": 128,
+  "acquisition_steps": 10,
+  "tr_initial_radius": 20,
+  "tr_success_tolerance": 3,
+  "tr_failure_tolerance": 40,
+  "tr_multiplier": 1.5
+}
