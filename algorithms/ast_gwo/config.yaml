@@ -9,8 +9,8 @@
   "weight_delay": 0.5,
   "abc_binary": "yosys-abc",
   "timeout": 60.0,
-  "population_size": 50,
-  "generations": 200,
+  "population_size": 40,
+  "generations": 100,
   "k_min": 6.0,
   "k_max": 14.0
 }
