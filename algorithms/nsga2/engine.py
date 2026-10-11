@@ -14,6 +14,7 @@ import random
 import shutil
 import time
 
+from common.progress import CheckpointScheduler
 from common import abc
 from common.actions import MAX_TOOL_CALLS, TRANSFORMS
 from common.experiments import clear_artifacts, describe_experiment, prepare_run, write_config
@@ -37,6 +38,7 @@ class Config:
     abc_binary: str = "yosys-abc"
     objective: str = "lut_count,lut_levels"
     max_tool_calls: int = MAX_TOOL_CALLS
+    checkpoint_interval: int = 200
     optimization_mode: str = "weighted_sum"
     weight_area: float = 0.5
     weight_delay: float = 0.5
@@ -44,7 +46,7 @@ class Config:
     def __post_init__(self):
         for name, minimum in (("recipe_length", 1), ("population_size", 2),
                               ("offspring_count", 1), ("generations", 0),
-                              ("lut_k", 2), ("max_tool_calls", 0)):
+                              ("lut_k", 2), ("max_tool_calls", 0), ("checkpoint_interval", 1)):
             value = getattr(self, name)
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -206,17 +208,18 @@ def run(circuit, config, *, progress=None):
     selection_key = scalar_key if weighted else None
     status = "completed"
     failure = None
+    checkpoints = CheckpointScheduler(config.checkpoint_interval)
 
     def best_member():
         if weighted:
             return scalar_best
         return min(archive.values(), key=lambda p: (*p.objectives, p.recipe), default=None)
 
-    def emit(event, generation, event_status="running"):
+    def emit(event, generation, event_status="running", *, final=False):
         if progress is not None:
             best = best_member()
             calls = budget.tool_calls
-            progress({
+            snapshot = {
                 "algorithm": "nsga2", "circuit": str(circuit),
                 "event": event, "generation": generation, "generations": config.generations,
                 "optimization_mode": config.optimization_mode,
@@ -225,6 +228,14 @@ def run(circuit, config, *, progress=None):
                 "weighted_fitness": best.weighted_fitness if best else None,
                 "best": solution(best) if best else None,
                 **({"pareto_size": len(archive)} if not weighted else {}),
+                "evaluations": evaluations, "baseline_evaluations": baseline_evaluations,
+                "abc_process_invocations": budget.abc_process_invocations,
+                "best_fitness": scalar_best.weighted_fitness if scalar_best else None,
+                "best_lut_count": scalar_best.objectives[0] if scalar_best else None,
+                "best_lut_levels": scalar_best.objectives[1] if scalar_best else None,
+                **({"pareto": [solution(p) for p in sorted(
+                    archive.values(), key=lambda p: (*p.objectives, p.recipe))]}
+                   if event == "checkpoint" and not weighted else {}),
                 "tool_calls": calls, "candidate_attempts": candidate_attempts,
                 "max_tool_calls": config.max_tool_calls,
                 "budget_utilization_percent": (100 * calls / config.max_tool_calls
@@ -233,7 +244,13 @@ def run(circuit, config, *, progress=None):
                 "cache_hits": cache_hits, "elapsed_seconds": time.perf_counter() - started,
                 "status": event_status,
                 **({"config": asdict(config)} if event == "configuration" else {}),
-            })
+            }
+            if event == "checkpoint":
+                checkpoint = checkpoints.checkpoint(snapshot, final=final)
+                if checkpoint is not None:
+                    progress(checkpoint)
+            else:
+                progress(snapshot)
 
     generation = 0
     emit("configuration", generation)
@@ -248,7 +265,7 @@ def run(circuit, config, *, progress=None):
         if recipe in cache:
             cache_hits += 1
             return make_member(recipe, cache[recipe])
-        budget.check()
+        budget.check(len(recipe))
         result = abc.evaluate_recipe(circuit, recipe, budget=budget, metric="lut",
                                      lut_k=config.lut_k, timeout=config.timeout,
                                      abc_binary=config.abc_binary)
@@ -263,6 +280,7 @@ def run(circuit, config, *, progress=None):
             if scalar_best is None or scalar_key(member) < scalar_key(scalar_best):
                 scalar_best = member
                 emit("improvement", generation)
+            emit("checkpoint", generation)
             return member
         previous_best = min(((*p.objectives, p.recipe) for p in archive.values()), default=None)
         if not any(dominates(p.objectives, objectives) for p in archive.values()):
@@ -272,12 +290,13 @@ def run(circuit, config, *, progress=None):
             archive[recipe] = member
         if previous_best is None or (*objectives, recipe) < previous_best:
             emit("improvement", generation)
+        emit("checkpoint", generation)
         return member
 
     try:
         if weighted:
             # The original circuit is a normalization reference, not a candidate.
-            budget.check()
+            budget.check(0)
             baseline_result = abc.evaluate_recipe(
                 circuit, [], budget=budget, metric="lut", lut_k=config.lut_k,
                 timeout=config.timeout, abc_binary=config.abc_binary)
@@ -315,6 +334,7 @@ def run(circuit, config, *, progress=None):
                    "completed_actions_lower_bound": getattr(exc, "completed_actions", 0)}
     ordered = sorted(archive.values(), key=lambda p: (*p.objectives, p.recipe))
     best = best_member() if status != "failed" else None
+    emit("checkpoint", generation, status, final=True)
     emit("summary", generation, status)
     executable = shutil.which(config.abc_binary)
     provenance = {
@@ -337,8 +357,12 @@ def run(circuit, config, *, progress=None):
         "weighted_fitness": best.weighted_fitness if best else None,
         "best": solution(best) if best else None,
         "pareto": [solution(p) for p in ordered],
-        "tool_calls": budget.tool_calls, "runtime_seconds": time.perf_counter() - started,
-        "successful_evaluations": evaluations, "cache_hits": cache_hits,
+        "tool_calls": budget.tool_calls, "abc_process_invocations": budget.abc_process_invocations,
+        "runtime_seconds": time.perf_counter() - started,
+        "evaluations": evaluations, "successful_evaluations": evaluations, "cache_hits": cache_hits,
+        "best_fitness": scalar_best.weighted_fitness if scalar_best else None,
+        "best_lut_count": scalar_best.objectives[0] if scalar_best else None,
+        "best_lut_levels": scalar_best.objectives[1] if scalar_best else None,
         "candidate_attempts": candidate_attempts,
         "completed_generations": completed_generations,
         "config": asdict(config), "provenance": provenance, "failure": failure,

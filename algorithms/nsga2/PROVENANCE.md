@@ -42,7 +42,8 @@ Import the shared 16 actions directly; replace the example's evaluator and
 reporting policies, and remove its repeated-run driver.
 Every cache miss calls `common.abc.evaluate_recipe` with the same `ActionBudget`
 object. No persistent cache, prefix evaluation, parallelism, or budget reset.
-Check one invocation before ABC; stop at the first unaffordable cache miss.
+Check the entire recipe action cost before ABC; stop at the first unaffordable
+cache miss without truncating it.
 In Pareto mode, already evaluated offspring remain in the archive if a
 generation stops early.
 Generation count means offspring generations **after** initialization; offspring
@@ -76,11 +77,11 @@ to one within absolute tolerance 1e-9; they are validated before ABC launches.
 
 Weighted mode first evaluates the original circuit with an empty recipe, using
 the same run-wide `ActionBudget`, ABC binary, LUT K and timeout as candidates.
-Both measured baseline metrics must be positive. This invocation costs one
-call, including a failure or timeout; a failed baseline aborts the search.
+Both measured baseline metrics must be positive. This invocation costs zero
+pool actions and one process invocation; a failed baseline aborts the search.
 The baseline is a normalization reference, not a search candidate. Cache hits
-remain free. Default candidate attempts still number 40 + 40 * 99 = 4000, but
-only 3999 candidate invocations fit after the baseline if all recipes are unique.
+remain free. Default candidate proposals can number 40 + 40 * 99 = 4000, but
+only 200 successful length-20 cache misses fit the 4000-action budget.
 The first unaffordable candidate attempt is recorded and stops the run with
 `budget_exhausted`; the budget and generation convention are never increased.
 
@@ -156,15 +157,21 @@ Ordinary budget exhaustion is a labeled partial run, with genuine measured best
 and archive if available; insufficient budget for one recipe writes no CSV.
 Any evaluation failure aborts the run, retains diagnostics and partial archive,
 and writes no successful CSV even if earlier candidates succeeded. Uncertain
-invocation counts remain JSON null and stop the run. A launched evaluation costs
-one tool call, including failures; recipe length and bundled commands do not
-affect the budget. Action completions are separate diagnostics.
+action counts remain JSON null and stop the run. Each executed pool entry costs
+one tool call; a bundled GIA entry also costs one. Loading, mapping and the empty
+baseline cost zero actions. Process invocations are counted separately.
 
 Defaults are seed 0, population 40, offspring 40, 99 offspring generations,
 recipe length 20, budget 4000, and 6-LUT mapping. Initialization plus offspring
 allows 40 + 40 * 99 = 4000 evaluation attempts; cache hits launch no ABC and do
 not consume calls. The runner streams flushed terminal and `progress.jsonl`
-events for configuration, best improvements, generations and final status.
+events for configuration, baseline, best improvements, generations, checkpoints
+and final status. Checkpoints use the shared scheduler and default interval of
+200 pool actions. See the [common progress schema](../../README.md#common-convergence-progress)
+for exact counting, recipe granularity, threshold grouping, final deduplication
+and Pareto semantics. The new `evaluations` field aliases candidate-only
+`successful_evaluations`; cache hits and failures are excluded. Scalar checkpoint
+fields are null in Pareto mode; its archive and legacy representative remain.
 
 Configuration is JSON syntax (a YAML subset), loaded with Python's standard
 `json` module; general YAML syntax is intentionally unsupported. Fixed seed,

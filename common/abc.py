@@ -29,10 +29,11 @@ class BudgetExceeded(RuntimeError):
 
 @dataclass
 class ActionBudget:
-    """ABC evaluation invocation budget. One per run, serial use only."""
+    """ABC pool-action budget. One per run, serial use only."""
 
     max_tool_calls: int
     tool_calls: int | None = 0
+    abc_process_invocations: int = 0
 
     def __post_init__(self):
         if type(self.max_tool_calls) is not int or self.max_tool_calls < 0:
@@ -42,7 +43,7 @@ class ActionBudget:
 
     def check(self, count=1):
         if self.tool_calls is None:
-            raise BudgetExceeded("Previous ABC launch left invocation count uncertain; stop this run")
+            raise BudgetExceeded("Previous ABC launch left action count uncertain; stop this run")
         if self.tool_calls + count > self.max_tool_calls:
             raise BudgetExceeded(f"Evaluation needs {count} tool calls; {self.max_tool_calls - self.tool_calls} remain")
 
@@ -67,9 +68,11 @@ def parse_qor(output, metric):
 def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", lut_k=None, timeout=60.0):
     """Reload circuit, strash, apply indices, and measure AIG or explicitly K-LUT QoR.
 
-    One launched evaluation costs one tool call, independent of recipe length.
-    Read, ordered transformations, mapping and statistics share that invocation.
+    Each executed pool entry costs one action call (including a GIA bundle).
+    Reserve the whole recipe before launch; loading/mapping cost zero actions.
     Rejected inputs and definite launch failures cost zero. No cache here.
+    Failed runs retain an exact count only if all actions have completion markers;
+    otherwise the interrupted action's execution is unknown and accounting is null.
     timeout=None disables the subprocess deadline. Action markers are diagnostic.
     An unexpected launch exception makes accounting uncertain and stops the run.
     """
@@ -93,7 +96,8 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
     if executable is None:
         raise ABCError(f"ABC executable unavailable: {abc_binary}")
     executable = str(Path(executable).resolve())
-    budget.check()
+    budget.check(len(recipe))
+    previous_calls = budget.tool_calls
     token = uuid.uuid4().hex
     action_prefix = f"ACTION_{token}_"
     finished = f"FINISHED_{token}"
@@ -127,8 +131,9 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
             # No process handle: cannot establish whether ABC started. Fail closed.
             budget.tool_calls = None
             raise
-        # Popen returned a process handle. Charge before waiting or parsing output.
-        budget.tool_calls += 1
+        # Reserve the maximum action cost; no next recipe can exceed the limit.
+        budget.tool_calls += len(recipe)
+        budget.abc_process_invocations += 1
         try:
             output, _ = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
@@ -136,18 +141,22 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
             output, _ = process.communicate()
             lines = {line.strip() for line in output.splitlines()}
             confirmed = sum(f"{action_prefix}{i}" in lines for i in range(len(recipe)))
+            budget.tool_calls = previous_calls + confirmed if confirmed == len(recipe) else None
             raise ABCError(f"ABC timed out after {timeout}s; stop this run", output, confirmed) from exc
         except Exception as exc:
             process.kill()
             process.wait()
+            budget.tool_calls = previous_calls if not recipe else None
             raise ABCError(f"Cannot collect ABC evaluation output: {exc}") from exc
         except BaseException:
-            # Keep the known charge and ensure no evaluation survives this call.
+            # Ensure no evaluation survives; interrupted action accounting is unknown.
             process.kill()
             process.wait()
+            budget.tool_calls = previous_calls if not recipe else None
             raise
     lines = [line.strip() for line in output.splitlines()]
     confirmed = sum(f"{action_prefix}{i}" in lines for i in range(len(recipe)))
+    budget.tool_calls = previous_calls + confirmed if confirmed == len(recipe) else None
     # ABC may report command errors while returning exit status zero.
     errors = re.search(r"(?im)^\s*(?:\*\*\s*cmd error|error\b|unknown command\b|usage:)", output)
     if process.returncode or errors or finished not in lines or confirmed != len(recipe):
@@ -162,7 +171,7 @@ def evaluate_recipe(circuit, recipe, *, budget, metric, abc_binary="yosys-abc", 
         "metric": metric,
         "lut_k": lut_k,
         "metrics": metrics,
-        "tool_calls": 1,
+        "tool_calls": confirmed,
         "transformation_count": confirmed,
         "total_tool_calls": budget.tool_calls,
         "abc_process_invocations": 1,

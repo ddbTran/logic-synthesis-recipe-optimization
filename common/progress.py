@@ -3,6 +3,38 @@
 import json
 
 
+class CheckpointScheduler:
+    """Emit measured snapshots, grouping thresholds crossed by one evaluation.
+
+    Call after updating best/archive, and once at termination with final=True.
+    Elapsed time and event metadata alone do not constitute new progress.
+    """
+
+    def __init__(self, interval=200):
+        if type(interval) is not int or interval <= 0:
+            raise ValueError("checkpoint_interval must be a positive integer")
+        self.interval = interval
+        self.next_threshold = interval
+        self.last_state = None
+
+    def checkpoint(self, snapshot, *, final=False):
+        calls = snapshot["tool_calls"]
+        thresholds = []
+        if calls is not None:
+            while self.next_threshold <= calls:
+                thresholds.append(self.next_threshold)
+                self.next_threshold += self.interval
+        state = {key: snapshot.get(key) for key in (
+            "evaluations", "tool_calls", "best_fitness", "best_lut_count",
+            "best_lut_levels", "best", "pareto", "candidate_attempts", "cache_hits",
+            "baseline_evaluations", "baseline_qor",
+        )}
+        if (thresholds or final) and state != self.last_state:
+            self.last_state = state
+            return {**snapshot, "event": "checkpoint", "checkpoint_thresholds": thresholds}
+        return None
+
+
 class ProgressLogger:
     def __init__(self, path, *, context=None):
         self.stream = path.open("w")

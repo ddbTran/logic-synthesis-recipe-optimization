@@ -1,4 +1,4 @@
-"""Shared action indices and default ABC evaluation invocation budget."""
+"""Shared action indices and default ABC pool-action budget."""
 
 TRANSFORMS = [
     # Rewrite

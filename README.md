@@ -146,15 +146,17 @@ python tests/test_nsga2.py
 python tests/smoke_abc.py --evaluator-only
 ```
 
-Defaults: seed 0, recipe length 20, population 30, offspring count 30,
-50 offspring generations after initialization, crossover probability 0.9,
+Defaults: seed 0, recipe length 20, population 40, offspring count 40,
+99 offspring generations after initialization, crossover probability 0.9,
 per-gene mutation probability 0.05, LUT K=6, timeout 60 seconds,
 `yosys-abc`, and **4000 executed pool actions**. CLI options override
 [config.yaml](algorithms/nsga2/config.yaml); `--config PATH` accepts JSON syntax,
 a YAML subset parsed by the standard library (no PyYAML dependency). Unknown
 keys and invalid settings fail before evaluation. `--timeout none` (or JSON
 `null`) disables the deadline. `--objective lut_count,lut_levels` is the only
-supported objective; scalar/ASIC/AIG objectives are rejected explicitly.
+supported objective pair. The default weighted-sum mode minimizes normalized
+LUT count/levels with weights 0.5/0.5; `--optimization-mode pareto` selects
+two-objective NSGA-II. ASIC/AIG objectives are rejected explicitly.
 
 Ordered full recipes, including repeats, are cached only within a run. Every
 cache miss uses the shared evaluator and the same budget object; each actually
@@ -162,25 +164,89 @@ executed length-L recipe costs L actions. Cache hits launch no ABC and cost zero
 Stop at the first unaffordable cache miss without truncating the recipe.
 Fixed seed/config/input/ABC bytes give reproducible search and best selection.
 
-Each invocation writes a unique `results/nsga2-*/` directory:
+Results retain the deterministic layout
+`results/algorithm/circuit/optimization_mode/config/seed_<seed>/`.
+Circuit identities include the suite and file extension; every effective config
+field is encoded, with seed in the final directory. Long configs may span
+ordered path components. No random run IDs are used. Identical configurations
+replace only known artifacts in their own directory; other files are preserved.
 
-- `result.json`: status, best solution, Pareto archive, cumulative `tool_calls`,
-  runtime, successful evaluation/cache counts, completed generations, full config,
-  provenance hashes (input, executable, engine, evaluator, source reference),
-  Python version, action pool and failure diagnostics.
-- `pareto.json`: separate nondominated archive over all successful evaluations,
-  including distinct recipes with identical QoR and partial-generation candidates.
-- `best.csv`: one measured representative chosen by lexicographic
-  **(LUT count, LUT levels, recipe indices)**. `best_recipe` is a CSV-quoted JSON
-  action-index list; config and provenance are JSON fields too.
+- `config.json`: effective configuration including seed and input/tool identities.
+- `progress.jsonl`: flushed configuration, baseline (weighted mode), improvement,
+  generation, checkpoint and summary events.
+- `result.json`: status, best/archive, counters, config, provenance and failures.
+- `best.csv`: measured scalar winner in weighted mode, or the legacy lexicographic
+  `(LUT count, LUT levels, recipe)` archive representative in Pareto mode.
+- `best.json` (weighted mode) or `pareto.json` (Pareto mode): winner or complete
+  nondominated archive, including candidates from partial generations.
 
-`completed` and `budget_exhausted` are distinct statuses; budget exhaustion may
-produce a measured partial-run CSV. Zero evaluated candidates produce no CSV and
-exit 1. Any evaluation failure aborts, writes diagnostic JSON and partial archive,
-sets best to null, writes no CSV, and exits 1. Uncertain counts remain JSON null.
-No fake objective values, budget reset or persistent caches are used. Runtime and
-unique output paths vary between otherwise reproducible runs. Results are ignored
-by git. Other engines still print `not implemented`, exit 2, and execute no ABC.
+`completed` and `budget_exhausted` distinguish full and partial runs. Zero
+successful candidates produce no CSV and exit 1. Evaluation failures abort,
+retain diagnostics/partial Pareto archive, set legacy `best` to null and write
+no successful CSV. New `best_*` fields retain previously measured scalar
+best-so-far even on failure. Results are ignored by git. Runtimes vary; search
+and paths are reproducible. Only NSGA-II and its weighted-sum GA variant are
+implemented; DRiLLS, Greedy, BOiLS, AST-GWO and the other engines remain
+placeholders (exit 2, no ABC execution).
+
+## Common convergence progress
+
+Every `checkpoint` includes these fields (also present on other engine events):
+
+| Field | Meaning |
+| --- | --- |
+| `event` | `"checkpoint"` |
+| `evaluations` | Integer count of successful, non-cached candidate recipe evaluations |
+| `tool_calls` | Cumulative executed pool actions; integer, or null on uncertain failures |
+| `elapsed_seconds` | Cumulative wall-clock runtime in seconds |
+| `best_fitness` | Lowest measured candidate weighted fitness so far, or null |
+| `best_lut_count`, `best_lut_levels` | QoR of that same scalar winner, or null |
+
+Weighted fitness is `weight_area * LUTs / baseline_LUTs + weight_delay * levels /
+baseline_levels` (lower is better). The original circuit's empty-recipe baseline
+is a normalization reference, excluded from `evaluations` and counted separately
+as `baseline_evaluations`. It executes zero pool actions, so costs zero
+`tool_calls`, but contributes one `abc_process_invocations` when launched.
+Cache hits, failed evaluations and unevaluated proposals never increment
+`evaluations`. `candidate_attempts` includes cache hits and a budget-rejected
+candidate; `cache_hits` and process invocations are separate counters.
+`result.json` retains `successful_evaluations` as an alias of `evaluations`.
+
+`checkpoint_interval` defaults to **200 actions**, configurable in JSON/YAML or
+with `--checkpoint-interval`. `common.progress.CheckpointScheduler` is reusable
+by future engines: supply a snapshot after updating measured best/archive and
+call once at termination with `final=True`. Scheduling is independent of
+generations. The evaluator returns only completed full recipes: no intermediate
+QoR inside a recipe is measured. For example, a recipe taking cumulative calls
+from 190 to 410 emits one snapshot at **410**, listing
+`checkpoint_thresholds: [200, 400]`. Every crossed threshold is represented
+once, without repeating an identical measurement or pretending it was observed
+at 200. Use the actual **`tool_calls` as the convergence X-axis**, never generation
+or threshold labels. No interpolation within recipes is justified.
+
+A final checkpoint is emitted when counters or measured best/archive differ
+from the last checkpoint, including early termination and cache-only progress.
+Elapsed time, generation and status changes alone do not create duplicate
+checkpoints; the final `summary` always carries termination status and runtime.
+Failed recipes yield no new QoR. Known final action counts can cross thresholds;
+uncertain counts remain null and cannot define additional thresholds.
+
+In Pareto mode all three scalar `best_*` fields are null. Checkpoints retain
+`pareto_size` and the full `pareto` archive; legacy `best` remains a CSV
+representative, not a scalar convergence criterion. Compare archives with an
+explicit multi-objective metric rather than treating this representative as a
+scalar optimum.
+
+Older results used one `tool_calls` per ABC process invocation. Their call axes
+must not be mixed with the standardized action counts. Commands, LUT mapping,
+fitness and search operators are unchanged; action-based budgets can terminate
+long recipes earlier. New configs include `checkpoint_interval` in experiment
+identity, so default runs use distinct deterministic paths from older configs.
+
+Validation: `python -m unittest discover -s tests -v` and
+`python tests/smoke_abc.py --evaluator-only`; the small CLI checks run both modes
+on ctrl/c17 and verify artifacts. `python tests/smoke_abc.py` additionally checks
+c17 conversion, all 16 actions and adder baseline mapping.
 
 ## Inspected integration sources
 
