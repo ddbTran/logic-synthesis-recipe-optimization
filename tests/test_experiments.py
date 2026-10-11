@@ -34,11 +34,11 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(first.parent, sibling.parent)
         self.assertEqual((first.name, sibling.name), ("seed_0", "seed_1"))
         self.assertEqual(first.parts[:4], ("results", "nsga2", "iscas85", "c17"))
-        self.assertRegex(first.parent.name, r"^pop40_off40_gen99_len20_cfg[0-9a-f]{12}$")
+        self.assertEqual(first.parent.name, "pop40_off40_gen99_len20")
         epfl = x.experiment_path(self.describe(circuit=ROOT / "benchmarks/epfl/arithmetic/adder.aig"))
         self.assertEqual(epfl.parts[:4], ("results", "nsga2", "epfl", "adder"))
 
-    def test_every_config_field_and_resolved_executable_affect_path(self):
+    def test_only_declared_parameters_and_seed_affect_config_path(self):
         original = self.describe()
         first = x.experiment_path(original)
         changes = dict(population_size=41, offspring_count=41, generations=98, recipe_length=21,
@@ -48,24 +48,27 @@ class ExperimentTests(unittest.TestCase):
         for key, value in changes.items():
             with self.subTest(key=key):
                 experiment = {**original, "config": {**original["config"], key: value}}
-                self.assertNotEqual(first, x.experiment_path(experiment))
+                if key in dict(x.PARAMETERS):
+                    self.assertNotEqual(first, x.experiment_path(experiment))
+                else:
+                    self.assertEqual(first, x.experiment_path(experiment))
         changed_binary = {**original, "abc_executable": {**original["abc_executable"], "resolved": "/other/abc"}}
-        self.assertNotEqual(first, x.experiment_path(changed_binary))
+        self.assertEqual(first, x.experiment_path(changed_binary))
         near_float = {**original, "config": {**original["config"], "crossover_rate": 0.9000000000000001}}
-        self.assertNotEqual(first, x.experiment_path(near_float))
+        self.assertEqual(first, x.experiment_path(near_float))
 
-    def test_suite_and_extension_identities_do_not_collide(self):
+    def test_benchmark_and_circuit_stem_paths(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(x, "REPOSITORY", Path(directory)):
             first = self.describe(circuit=Path(directory) / "suite_a/c17.aig")
             second = self.describe(circuit=Path(directory) / "suite_b/c17.aig")
             extension = self.describe(circuit=Path(directory) / "suite_a/c17.blif")
             self.assertNotEqual(x.experiment_path(first), x.experiment_path(second))
-            self.assertNotEqual(x.experiment_path(first), x.experiment_path(extension))
+            self.assertEqual(x.experiment_path(first), x.experiment_path(extension))
             self.assertEqual(first["circuit_identity"], "repo/suite_a/c17.aig")
             external = self.describe(circuit="/suite_a/c17.aig")
             self.assertTrue(external["circuit_identity"].startswith("external/"))
 
-    def test_encoding_and_long_configs(self):
+    def test_fixed_settings_do_not_lengthen_paths(self):
         paths = []
         for binary in ("a_b", "a%5Fb", "a/b", "a b", "..", "a"*500):
             experiment = self.describe(replace(e.Config(), abc_binary=binary))
@@ -74,7 +77,7 @@ class ExperimentTests(unittest.TestCase):
             self.assertTrue(all(len(part.encode()) <= 200 for part in path.parts))
             self.assertNotIn("..", path.parts)
             self.assertEqual(path, x.experiment_path(experiment))
-        self.assertEqual(len(set(paths)), len(paths))
+        self.assertEqual(len(set(paths)), 1)
 
     def test_prepare_clears_only_run_owned_files(self):
         with tempfile.TemporaryDirectory() as root:
@@ -85,7 +88,7 @@ class ExperimentTests(unittest.TestCase):
             (directory / "notes.txt").write_text("user notes")
             other_seed = x.prepare_run(self.describe(replace(e.Config(), seed=1)), root)
             (other_seed / "result.json").write_text("other seed")
-            other_config = x.prepare_run(self.describe(replace(e.Config(), mutation_rate=0.1)), root)
+            other_config = x.prepare_run(self.describe(replace(e.Config(), population_size=41)), root)
             (other_config / "result.json").write_text("other configuration")
             self.assertEqual(x.prepare_run(experiment, root), directory)
             for name in set(x.RUN_ARTIFACTS) - {"config.json"}:

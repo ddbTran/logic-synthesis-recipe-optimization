@@ -47,7 +47,7 @@ def component(value):
 
 
 def experiment_path(experiment, root="results"):
-    """Compact readable labels with a stable suffix for the complete identity."""
+    """Readable paths using the declared varying parameters and seed."""
     config = experiment["config"]
     identity = experiment["circuit_identity"]
     parts = identity.split("/")
@@ -56,13 +56,8 @@ def experiment_path(experiment, root="results"):
     else:
         suite = Path(experiment["circuit"]).parent.name or "external"
     circuit = Path(experiment["circuit"]).stem
-    # Keep seeds as siblings. The suffix distinguishes modes, less common
-    # settings, input paths/extensions and executables without spelling them out.
-    key = {"config": {name: value for name, value in config.items() if name != "seed"},
-           "circuit_identity": identity, "executable": experiment["abc_executable"]["resolved"]}
-    suffix = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:12]
     tokens = [label + component(config[name]) for name, label in PARAMETERS if name in config]
-    label = "_".join([*tokens, "cfg" + suffix])
+    label = "_".join(tokens)
     return (Path(root) / component(experiment["algorithm"]) / component(suite)
             / component(circuit) / label / f"seed_{config['seed']}")
 

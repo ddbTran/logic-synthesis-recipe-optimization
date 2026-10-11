@@ -163,13 +163,13 @@ Fixed seed/config/input/ABC bytes give reproducible search and best selection.
 
 Results use the compact deterministic layout
 `results/<algorithm>/<benchmark>/<circuit>/<config>/seed_<seed>/`, for example:
-`results/nsga2/epfl/adder/pop40_off40_gen99_len20_cfg<12-hex>/seed_7/`.
-The readable config label shows population, offspring, generations and recipe
-length. A short deterministic suffix distinguishes all effective config settings
-(including mode), circuit paths/extensions and the resolved executable. Seed
-remains in the final directory and full details remain in `config.json`.
-Identical configurations replace only known artifacts in their own directory;
-other files and older-layout directories are preserved. No random run IDs are used.
+`results/nsga2/epfl/adder/pop40_off40_gen99_len20/seed_7/`.
+The config label contains only the declared varying parameters: population,
+offspring, generations and recipe length. Seed remains in the final directory.
+Other settings are held fixed for data collection and recorded in `config.json`;
+they do not affect the directory name. Rerunning the same declared parameters
+and seed replaces that directory's known artifacts. Other files and older-layout
+directories are preserved. No hashes or random run IDs appear in directory names.
 Terminal output shows the circuit path once at the beginning, progress counters
 without repeated paths, and the results path once at the end. JSONL retains
 complete metadata on every event.
@@ -245,8 +245,8 @@ scalar optimum.
 Sequence-call accounting preserves the original evaluator budget semantics.
 Commands, LUT mapping, fitness and search operators are unchanged. The earlier
 action-counting revision used a different budget unit; do not mix its results
-with sequence-based curves. New configs include `checkpoint_interval` in their
-deterministic experiment identity.
+with sequence-based curves. `checkpoint_interval` is recorded in
+`config.json` and held fixed alongside the other settings outside the path label.
 
 Validation: `python -m unittest discover -s tests -v` and
 `python tests/smoke_abc.py --evaluator-only`; the small CLI checks run both modes

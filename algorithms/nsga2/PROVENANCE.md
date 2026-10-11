@@ -116,16 +116,17 @@ algorithm being compared. No particular comparison algorithm is assumed.
 The runner resolves defaults and CLI overrides before opening a run directory:
 
 ```
-results/nsga2/<benchmark>/<circuit-stem>/pop40_off40_gen99_len20_cfg<12-hex>/seed_<seed>/
+results/nsga2/<benchmark>/<circuit-stem>/pop40_off40_gen99_len20/seed_<seed>/
 ```
 
 EPFL inputs use `epfl/<circuit>`; converted ISCAS85 inputs use
 `iscas85/<circuit>`. Other inputs use their parent directory name as the benchmark.
-Population, offspring count, generations and recipe length remain readable.
-A deterministic 12-hex SHA-256 suffix covers all effective config fields except
-seed, full circuit identity (including extension), and resolved executable path,
-so modes and other settings cannot silently share the same readable config name.
-Seed has its own final directory. No random IDs or timestamps are used.
+Only the declared varying parameters (population, offspring count, generations,
+recipe length) appear in the config label. Seed has its own final directory.
+Other settings are held fixed during data collection and stored in `config.json`;
+they do not alter the directory name. Rerunning the same declared parameters and
+seed replaces the known artifacts in that directory. No hashes, random IDs or
+timestamps appear in directory names.
 
 `config.json` stores the complete resolved config including seed, metric,
 circuit identity/path/checksum, and requested/resolved ABC executable identity
