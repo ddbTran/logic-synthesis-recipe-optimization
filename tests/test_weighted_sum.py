@@ -190,7 +190,7 @@ class WeightedSumTests(unittest.TestCase):
                     "--config", str(path), "--weight-area", "0.7", "--weight-delay", "0.3", *extra],
                     cwd=directory, capture_output=True, text=True)
                 self.assertEqual(process.returncode, 0, process.stderr)
-                results = [json.loads(p.read_text()) for p in Path(directory).glob("results/nsga2-*/result.json")]
+                results = [json.loads(p.read_text()) for p in Path(directory).glob("results/nsga2/**/result.json")]
                 result, = (r for r in results if r["optimization_mode"] == mode)
                 self.assertEqual((result["weight_area"], result["weight_delay"]), (0.7, 0.3))
                 self.assertEqual(result["tool_calls"], calls)
@@ -210,8 +210,14 @@ class WeightedSumTests(unittest.TestCase):
                         "--max-tool-calls", "4", "--mutation-rate", "1"], cwd=directory,
                         capture_output=True, text=True)
                     self.assertEqual(process.returncode, 0, process.stderr)
-                    result_path, = Path(directory).glob("results/nsga2-*/result.json")
+                    result_path, = Path(directory).glob("results/nsga2/**/result.json")
                     result = json.loads(result_path.read_text())
+                    metadata = json.loads((result_path.parent / "config.json").read_text())
+                    self.assertEqual(metadata, result["experiment"])
+                    self.assertEqual(metadata["config"], result["config"])
+                    self.assertEqual(metadata["config"]["seed"], 7)
+                    self.assertEqual(metadata["abc_executable"]["resolved"], result["provenance"]["abc_executable"])
+                    self.assertEqual(metadata["abc_executable"]["sha256"], result["provenance"]["abc_sha256"])
                     self.assertEqual(result["optimization_mode"], mode)
                     self.assertEqual(result["config"], asdict(e.Config(optimization_mode=mode,
                         weight_area=0.8, weight_delay=0.2, seed=7, population_size=2,
@@ -226,6 +232,11 @@ class WeightedSumTests(unittest.TestCase):
                     events = [json.loads(line) for line in
                               (result_path.parent / "progress.jsonl").read_text().splitlines()]
                     self.assertTrue(all(event["optimization_mode"] == mode for event in events))
+                    self.assertTrue(all(event["algorithm"] == "nsga2" for event in events))
+                    self.assertTrue(all(event["circuit"] == metadata["circuit_identity"] for event in events))
+                    self.assertTrue(all(event["results_directory"] == str(result_path.parent.relative_to(directory))
+                                        for event in events))
+                    self.assertTrue(all(event["effective_config"] == result["config"] for event in events))
                     self.assertEqual(events[-1]["best"], result["best"])
                     self.assertEqual(events[-1]["tool_calls"], 4)
                     self.assertIn(f"mode={mode}", process.stdout)

@@ -104,6 +104,17 @@ class EvaluatorTests(unittest.TestCase):
             run.assert_not_called()
         self.assertEqual(budget.tool_calls, 0)
 
+    def test_real_final_call_at_default_budget_boundary(self):
+        # Seed the counter to test the limit without running a full experiment.
+        budget = ActionBudget(MAX_TOOL_CALLS, MAX_TOOL_CALLS - 1)
+        result = self.evaluate([0] * 20, circuit=self.circuits[1], budget=budget)
+        self.assertEqual(result["total_tool_calls"], 4000)
+        with patch("common.abc.subprocess.Popen") as launch:
+            with self.assertRaises(BudgetExceeded):
+                self.evaluate([], budget=budget)
+            launch.assert_not_called()
+        self.assertEqual(budget.tool_calls, 4000)
+
     def test_missing_input_and_executable(self):
         budget = ActionBudget(3)
         with tempfile.TemporaryDirectory() as directory, patch("common.abc.subprocess.Popen") as run:

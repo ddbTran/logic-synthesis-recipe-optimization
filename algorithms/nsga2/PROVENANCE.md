@@ -105,7 +105,52 @@ CLI selection (all existing overrides remain supported):
 Omitting `--optimization-mode` uses the config mode, defaulting to `weighted_sum`.
 Selecting `pareto` in the config or CLI retains the original two-objective
 search and incurs no baseline invocation. Older config files without the new
-fields inherit the Weighted Sum default.
+fields inherit the Weighted Sum default. The default weights are provisional;
+set both weights to match the exact normalized objective of the research
+algorithm being compared. No particular comparison algorithm is assumed.
+
+## Reproducible experiment directories
+
+The runner resolves defaults and CLI overrides before opening a run directory:
+
+```
+results/nsga2/repo/benchmarks/<suite>/<circuit-with-extension>/<mode>/<effective-config>/seed_<seed>/
+```
+
+Circuit identity uses the resolved repository-relative path prefixed with
+`repo/`, or the resolved absolute path prefixed with `external/` for outside
+inputs. Suites and extensions remain part of the identity, avoiding basename
+collisions. Config parameters appear in fixed order:
+`pop`, `off`, `gen`, `len`, `b`, `cr`, `mr`, `k`, `t`, `wa`, `wd`, `obj`, `abc`,
+then `exe` for the resolved ABC executable path. Mode has its own directory;
+seed has its own final directory. Future config fields are appended in sorted
+name order. Every resolved config field is represented. Unsafe path characters
+and underscores inside parameter values use reversible percent encoding.
+Float text retains round-trip precision, and integral numeric settings have
+canonical integer text. Long configs continue across ordered path components
+of at most 200 characters. No random IDs, timestamps or config hashes appear
+in directory names.
+
+`config.json` stores the complete resolved config including seed, metric,
+circuit identity/path/checksum, and requested/resolved ABC executable identity
+and checksum. File content hashes are provenance metadata, not directory names;
+replacing a circuit or executable at the same path overwrites the same
+experiment directory, recording its new checksum.
+
+At CLI run start, only `config.json`, `result.json`, `best.csv`, `best.json`,
+`pareto.json` and `progress.jsonl` in that seed directory are replaced. Other
+files, seeds and configurations are preserved. Directory symlinks and artifact
+directories are rejected rather than traversed or recursively removed. Thus an
+interrupted rerun has no stale successful result, and a failed rerun writes no
+successful CSV. Existing random-name result directories are left untouched.
+Runs remain serial; simultaneous writers to the same experiment are unsupported.
+
+Library callers may use `describe_experiment` and `prepare_run` before calling
+`run`, then pass the prepared directory to `write_results`. Calling
+`write_results` with only a root also uses the deterministic identity, replacing
+known outputs at write time. Finalization preserves the CLI's live progress log.
+The existing flushed logger records algorithm, suite-qualified circuit,
+effective config and results directory alongside optimization progress.
 
 Ordinary budget exhaustion is a labeled partial run, with genuine measured best
 and archive if available; insufficient budget for one recipe writes no CSV.
@@ -124,6 +169,6 @@ events for configuration, best improvements, generations and final status.
 Configuration is JSON syntax (a YAML subset), loaded with Python's standard
 `json` module; general YAML syntax is intentionally unsupported. Fixed seed,
 configuration, input bytes and ABC executable give deterministic search and
-selection; runtimes and output-directory names naturally vary. Results include
-source-reference, engine, evaluator, circuit and ABC binary hashes, Python
+selection; runtimes naturally vary while experiment directory names are stable.
+Results include source-reference, engine, evaluator, circuit and ABC binary hashes, Python
 version, full configuration and action pool for comparison provenance.

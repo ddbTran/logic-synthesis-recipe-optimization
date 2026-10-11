@@ -232,7 +232,7 @@ class NSGA2Tests(unittest.TestCase):
                      "--lut-k", "6", "--crossover-rate", "0.8", "--mutation-rate", "1",
                      "--timeout", "none"], cwd=directory, capture_output=True, text=True)
                 self.assertEqual(process.returncode, 0, process.stderr)
-                result_path, = Path(directory).glob("results/nsga2-*/result.json")
+                result_path, = Path(directory).glob("results/nsga2/**/result.json")
                 result = json.loads(result_path.read_text())
                 results.append(result)
                 self.assertEqual(result["status"], "completed")
@@ -261,7 +261,7 @@ class NSGA2Tests(unittest.TestCase):
                      "--recipe-length", "2", "--population-size", "2", "--generations", "0", *extra],
                     cwd=directory, capture_output=True, text=True, check=False)
                 self.assertEqual(process.returncode, 1, process.stderr)
-                result_path, = Path(directory).glob("results/nsga2-*/result.json")
+                result_path, = Path(directory).glob("results/nsga2/**/result.json")
                 result = json.loads(result_path.read_text())
                 self.assertEqual(result["status"], status)
                 self.assertEqual(result["tool_calls"], 0)

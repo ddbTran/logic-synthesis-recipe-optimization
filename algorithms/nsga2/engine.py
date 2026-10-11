@@ -12,11 +12,11 @@ from pathlib import Path
 import platform
 import random
 import shutil
-import tempfile
 import time
 
 from common import abc
 from common.actions import MAX_TOOL_CALLS, TRANSFORMS
+from common.experiments import clear_artifacts, describe_experiment, prepare_run, write_config
 
 
 VARIANT = "discrete-uniform-random-reset-nsga2-v1"
@@ -217,6 +217,7 @@ def run(circuit, config, *, progress=None):
             best = best_member()
             calls = budget.tool_calls
             progress({
+                "algorithm": "nsga2", "circuit": str(circuit),
                 "event": event, "generation": generation, "generations": config.generations,
                 "optimization_mode": config.optimization_mode,
                 "weight_area": config.weight_area, "weight_delay": config.weight_delay,
@@ -345,10 +346,16 @@ def run(circuit, config, *, progress=None):
 
 
 def write_results(result, root="results", *, directory=None):
-    """Unique run directory prevents stale success rows after a failed rerun."""
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
-    directory = Path(directory) if directory is not None else Path(tempfile.mkdtemp(prefix="nsga2-", dir=root))
+    """Write to the deterministic experiment path, preserving live progress."""
+    experiment = result.get("experiment")
+    if experiment is None:
+        experiment = describe_experiment(result["algorithm"], result["circuit"], result["config"])
+    if directory is None:
+        directory = prepare_run(experiment, root)
+    else:
+        directory = Path(directory)
+        clear_artifacts(directory, ("config.json", "result.json", "best.csv", "best.json", "pareto.json"))
+        write_config(directory, experiment)
     (directory / "result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     if result.get("optimization_mode", "pareto") == "pareto":
         (directory / "pareto.json").write_text(json.dumps(result["pareto"], sort_keys=True) + "\n")

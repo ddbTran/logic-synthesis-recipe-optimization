@@ -42,14 +42,17 @@ def main():
                 config = replace(config, timeout=args.timeout)
         except (OSError, ValueError, TypeError) as exc:
             parser.error(str(exc))
-        from pathlib import Path
-        import tempfile
+        from dataclasses import asdict
+        from common.experiments import describe_experiment, prepare_run
         from common.progress import ProgressLogger
 
-        Path("results").mkdir(exist_ok=True)
-        directory = Path(tempfile.mkdtemp(prefix="nsga2-", dir="results"))
-        with ProgressLogger(directory / "progress.jsonl") as progress:
+        experiment = describe_experiment("nsga2", args.circuit, asdict(config))
+        directory = prepare_run(experiment)
+        context = {"algorithm": "nsga2", "circuit": experiment["circuit_identity"],
+                   "effective_config": experiment["config"], "results_directory": str(directory)}
+        with ProgressLogger(directory / "progress.jsonl", context=context) as progress:
             result = run(args.circuit, config, progress=progress)
+        result["experiment"] = experiment
         write_results(result, directory=directory)
         print(f"nsga2: {result['status']}; tool_calls={result['tool_calls']}; results={directory}", flush=True)
         if result["failure"]:
