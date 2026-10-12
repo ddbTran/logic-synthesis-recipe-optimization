@@ -234,7 +234,7 @@ class EngineTests(unittest.TestCase):
                        {'k_max': float('inf')}, {'optimization_mode': 'pareto'}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 e.Config(**values)
-        self.assertEqual(e.load_config().population_size, 50)
+        self.assertEqual(e.load_config().population_size, 40)
         self.assertEqual(e.load_config(k_min=18, k_max=18).k_max, 18)
 
     @unittest.skipUnless(shutil.which('yosys-abc'), 'ABC unavailable')

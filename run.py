@@ -5,7 +5,7 @@ import sys
 
 ALGORITHMS = (
     "ast_gwo", "drills", "nsga2", "erl_ls", "boils",
-    "flowtune", "cb_evo", "rl4ls", "greedy",
+    "cb_evo", "greedy",
 )
 
 

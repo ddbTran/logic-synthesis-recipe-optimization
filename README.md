@@ -1,602 +1,154 @@
-# Logic synthesis recipe optimization benchmark
+# Introduction
 
-Minimal experimental Python repository for comparable QoR measurements in a
-research paper. All nine algorithms, including AST-GWO, are comparison baselines.
-NSGA-II, Sequential Forward Greedy, DRiLLS, BOiLS and AST-GWO are integrated for
-reproducible LUT QoR collection; the other four engines remain placeholders. Only small smoke runs
-have been performed.
-Benchmark environment smoke checks are documented in [benchmarks/README.md](benchmarks/README.md).
+This project implements logic-synthesis recipe optimization algorithms to generate
+reproducible quality-of-result (QoR) comparison data for research. The five algorithms
+share benchmarks, ABC evaluation, a 16-action pool, a normalized weighted objective,
+and recipe-evaluation budget accounting.
 
-## Quick start
+Algorithm-specific optimization mechanisms are preserved while evaluation is
+standardized. The project does not claim to reproduce papers' numerical results.
 
-Use Python 3.11 and an ABC executable exposing the shared actions
-(default: `yosys-abc`). DRiLLS also needs Yosys, PyTorch and NumPy; NSGA-II and
-Greedy remain standard-library engines with no PyTorch imports.
-Run commands from this repository's root:
+## 1. Quick Start
 
-```bash
-command -v python3.11
-python3.11 --version
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python run.py --help
-.venv/bin/python tests/smoke_abc.py --evaluator-only
+1. Clone the repository and its pinned benchmark submodules:
 
-# Two greedy depths: 32 candidate evaluations plus one baseline invocation.
-.venv/bin/python run.py --algorithm greedy \
-  --circuit benchmarks/epfl/arithmetic/adder.aig \
-  --recipe-length 2 --max-tool-calls 32 --checkpoint-interval 16 \
-  --seed 0 --timeout 60
-```
+   ```bash
+   git clone --recurse-submodules https://github.com/ddbTran/logic-synthesis-recipe-optimization.git
+   cd logic-synthesis-recipe-optimization
+   ```
 
-Inspect `results/greedy/epfl/adder/len2/seed_0/result.json` for the termination
-status and both the constructed recipe and best-so-far candidate. Rerunning
-these declared parameters and seed replaces that directory's experiment
-artifacts. See [Greedy](#sequential-forward-greedy) and
-[NSGA-II](#nsga-ii-runner-and-results) for configuration and output details.
+2. Install system dependencies. On Debian 12 with `sudo` access:
 
-## Layout and status
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y git python3.11 python3.11-venv python3-pip yosys berkeley-abc
+   python3.11 --version
+   command -v yosys yosys-abc
+   ```
 
-```text
-algorithms/{ast_gwo,drills,nsga2,erl_ls,boils,flowtune,cb_evo,rl4ls,greedy}/
-common/actions.py   # implemented: action indices and default budget
-common/abc.py       # implemented: serial ABC evaluation and typed QoR parsing
-benchmarks/        # pinned EPFL/ISPRAS submodules; 11 ISCAS85 AIG conversions and validation notes
-results/           # ignored smoke evidence and future experiment CSV outputs
-run.py             # NSGA-II / Greedy / DRiLLS runner
-requirements.txt   # Python 3.11; PyTorch and NumPy for DRiLLS
-```
+   Other systems need Python 3.11, Yosys, and ABC exposing the shared actions.
+   The default ABC command is `yosys-abc` (supplied by Yosys).
 
-| CLI algorithm | Implementation | Optimization modes |
-| --- | --- | --- |
-| `greedy` | Sequential Forward Greedy | `weighted_sum` |
-| `nsga2` | Scalar GA by default; discrete NSGA-II in Pareto mode | `weighted_sum`, `pareto` |
-| `drills` | Original DRiLLS A2C port to PyTorch | `weighted_sum` |
-| `boils` | BOiLS string-subsequence GP with EI | `weighted_sum` |
-| `ast_gwo` | Adaptive sigmoid transfer binary GWO | `weighted_sum` |
-| Other four identifiers | Placeholders; exit 2 without ABC execution | None |
+3. Create and activate a virtual environment:
 
-NSGA-II, Greedy, DRiLLS, BOiLS and AST-GWO each have `engine.py` and `config.yaml`. Empty algorithm
-directories contain `.gitkeep`. Each future algorithm gets `engine.py` and
-`config.yaml` for its own hyperparameters when integrated. No dummy engines or
-speculative configurations are supplied. Every engine must import the shared
-pool and use shared evaluation; no configuration framework is needed.
+   ```bash
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+   ```
 
-## Shared actions and budget
+4. Install the Python dependencies (NumPy and CPU PyTorch):
 
-`common/actions.py` is the authority for these exact indices:
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
 
-| Index | Action | Index | Action |
-| --- | --- | --- | --- |
-| 0 | `rewrite` | 8 | `resub` |
-| 1 | `rewrite -z` | 9 | `resub -z` |
-| 2 | `rewrite -l` | 10 | `resub -l` |
-| 3 | `rewrite -z -l` | 11 | `resub -z -l` |
-| 4 | `refactor` | 12 | `balance` |
-| 5 | `refactor -z` | 13 | `balance -l` |
-| 6 | `refactor -l` | 14 | `&get -n; &dsdb; &put` |
-| 7 | `refactor -z -l` | 15 | `&get -n; &sopb; &put` |
+5. Verify both benchmark suites and the tracked ISCAS85 conversions:
 
-`MAX_TOOL_CALLS = 4000` is the default for RL and metaheuristic runs. BOiLS's
-budget remains undecided and must be explicitly configured. The utility's
-`ActionBudget(limit)` requires an explicit limit; future adapters select the
-appropriate default without changing the core search algorithm.
+   ```bash
+   git submodule update --init --recursive
+   git submodule status
+   test -f benchmarks/epfl/arithmetic/adder.aig
+   test -f benchmarks/epfl/random_control/ctrl.aig
+   test -f benchmarks/iscas85/iscas85/verilog/c17.v
+   test -f benchmarks/converted/iscas85/c17.aig
+   git ls-files 'benchmarks/converted/iscas85/*.aig'
+   ```
 
-One tool call is one launched ABC sequence (full recipe evaluation), regardless
-of recipe length or how many commands an action contains. An empty-recipe
-baseline is one ABC invocation, but the runner accounts for it separately and
-excludes it from the candidate `tool_calls` budget. A cache hit launches no ABC
-and costs zero.
-Replaying L prefixes in separate evaluations costs L calls. Loading, `strash`,
-transformations, mapping and statistics all share the same sequence invocation.
-Action completion counts are diagnostics, not budget charges.
+   EPFL AIG files are used directly. ISCAS85 originates from Verilog and requires
+   conversion to AIG; all 11 converted `.aig` inputs are already tracked in Git,
+   so no reconversion is required. Optionally run `python benchmarks/convert_iscas85.py`
+   to regenerate and check equivalence. See [benchmark documentation](benchmarks/README.md)
+   for conversion details, validation, and EPFL/ISPRAS source attribution.
 
-The serial evaluator checks one call before launch and never truncates recipes.
-A launched sequence costs one call even if it fails or times out. Invalid inputs
-and definite launch failures cost zero. An unexpected launch exception can leave
-invocation accounting uncertain (`budget.tool_calls = None`); abort the run and
-refuse further evaluations. Never reset the budget to continue a failed run.
-Parallel accounting is not implemented.
+6. Run unit and regression tests:
 
-## ABC and QoR
+   ```bash
+   python -m unittest discover -s tests -v
+   ```
 
-`evaluate_recipe(circuit, recipe, budget=..., metric=..., ...)` uses ABC's batch
-script mode (`-s -f`), with initialization aliases disabled. It loads the original
-input, runs `strash`, applies action indices, and calls `print_stats`. Completion
-markers detect interrupted scripts even when ABC returns exit code zero. It
-handles missing executables, command failures, malformed metrics and timeouts,
-and returns raw output with measurements and runtime. No shell is invoked.
+7. Run the minimal real-ABC evaluator smoke suite:
 
-For a run using the 4,000-sequence budget, call the existing API from the project
-root and reuse **the same budget object** for every candidate:
+   ```bash
+   python tests/smoke_abc.py --evaluator-only
+   ```
 
-```python
-from common.abc import ActionBudget, evaluate_recipe
-from common.actions import MAX_TOOL_CALLS
-
-budget = ActionBudget(MAX_TOOL_CALLS)  # BOiLS must supply its own selected limit.
-result = evaluate_recipe(
-    "benchmarks/epfl/random_control/ctrl.aig",
-    [0, 4, 14],  # Ordered action indices 0-15; repeats and [] are supported.
-    budget=budget, metric="lut", lut_k=6,
-    abc_binary="yosys-abc", timeout=None,
-)
-print(result["metrics"])          # {"lut_count": int, "lut_levels": int}
-print(result["tool_calls"])       # Sequence invocations in this evaluation (1 here).
-print(result["total_tool_calls"]) # Cumulative launched sequences in this run.
-```
-
-`timeout` defaults to 60 seconds; `None` disables the deadline. Change
-`abc_binary` to an executable name or path when needed. The result also includes
-the recipe, raw ABC output, runtime, and separate process/evaluation counts.
-Input loading, ordered actions, `if -K 6` mapping and measurement share one
-invocation. `BudgetExceeded` rejects an evaluation before launch when no calls
-remain. `ABCError` reports execution/parsing failures with raw output and
-confirmed action completions; missing inputs raise `FileNotFoundError`.
-Failed evaluations return no QoR but retain the known sequence charge, including
-timeouts and interrupted actions. No candidate caching or fitness/reward
-calculation is performed by this utility.
-
-Run the focused evaluator checks without benchmark conversion or equivalence:
-
-```bash
-python tests/smoke_abc.py --evaluator-only
-```
-
-Choose the metric explicitly:
-
-- `metric="aig"`: unmapped `and` and `lev`, returned as `aig_nodes`, `aig_levels`.
-- `metric="lut", lut_k=K`: `if -K K` followed by `nd` and `lev`, returned as
-  `lut_count`, `lut_levels`. K must be explicitly selected and supported by ABC.
-
-These metrics are distinct from ASIC area/delay. ASIC mapping is **not
-implemented**: select a technology library, mapping commands, timing constraints,
-units, and parsing policy first. No target library has been configured or validated.
-No normalized fitness/reward is imposed by the utility.
-
-Supply an ABC-readable `.aig`, `.aiger`, `.blif`, `.bench`, or supported `.v` file;
-ABC is not a general RTL compiler. The default executable is `yosys-abc`; override
-`abc_binary` with an executable name or path. The inspected environment has
-`/usr/bin/yosys-abc` (ABC 1.01), and its command help exposes `&dsdb` and `&sopb`.
-All 16 actions and LUT-6 mapping now pass smoke checks on EPFL ctrl and converted
-ISCAS85 c17; see [benchmark validation](benchmarks/README.md) for measurements and
-provenance limitations. All 11 ISCAS85 AIG conversions pass source equivalence;
-EPFL adder also passes read/mapping checks. Full-suite action compatibility is
-still pending.
-
-## NSGA-II runner and results
-
-The `nsga2` engine defaults to a scalar genetic algorithm using normalized
-weighted-sum fitness for parent selection, survival and best selection.
-`--optimization-mode pareto` selects discrete NSGA-II with binary rank/crowding
-tournaments and elitist nondominated/crowding survival, minimizing LUT count and
-LUT levels separately. Both modes use uniform crossover and random-reset
-mutation. See
-[provenance and adaptations](algorithms/nsga2/PROVENANCE.md) for source inspection,
-licensing decisions, precise operators and deterministic tie policies. This is
-an independent implementation of the supplied example's variant, not BOiLS's
-integer SBX/polynomial-mutation variant. No external source was copied.
-
-From the project directory, these small real-ABC smoke runs use existing inputs:
-
-```bash
-python run.py --algorithm nsga2 --circuit benchmarks/epfl/random_control/ctrl.aig --seed 7 --recipe-length 3 --population-size 4 --offspring-count 3 --generations 2 --max-tool-calls 30
-python run.py --algorithm nsga2 --circuit benchmarks/converted/iscas85/c17.aig --seed 7 --recipe-length 3 --population-size 4 --offspring-count 3 --generations 2 --max-tool-calls 30
-python tests/test_nsga2.py
-python tests/smoke_abc.py --evaluator-only
-```
-
-Python `Config` defaults: seed 0, recipe length 20, population 40, offspring count 40,
-99 offspring generations after initialization, crossover probability 0.9,
-per-gene mutation probability 0.05, LUT K=6, timeout 60 seconds,
-`yosys-abc`, and **4000 launched sequences**. CLI defaults come from [config.yaml](algorithms/nsga2/config.yaml), which may
-override the Python defaults. CLI options override
-[config.yaml](algorithms/nsga2/config.yaml); `--config PATH` accepts JSON syntax,
-a YAML subset parsed by the standard library (no PyYAML dependency). Unknown
-keys and invalid settings fail before evaluation. `--timeout none` (or JSON
-`null`) disables the deadline. `--objective lut_count,lut_levels` is the only
-supported objective pair. The default weighted-sum mode minimizes normalized
-LUT count/levels with weights 0.5/0.5; `--optimization-mode pareto` selects
-two-objective NSGA-II. ASIC/AIG objectives are rejected explicitly.
-
-Ordered full recipes, including repeats, are cached only within a run. Every
-cache miss uses the shared evaluator and the same budget object; each launched
-sequence costs one tool call regardless of recipe length. Cache hits launch no ABC and cost zero.
-Stop at the first cache miss with no remaining calls; never truncate recipes.
-Fixed seed/config/input/ABC bytes give reproducible search and best selection.
-
-Results use the compact deterministic layout
-`results/<algorithm>/<benchmark>/<circuit>/<config>/seed_<seed>/`, for example:
-`results/nsga2/epfl/adder/pop40_off40_gen99_len20/seed_7/`.
-The config label contains only the declared varying parameters: population,
-offspring, generations and recipe length. Seed remains in the final directory.
-Other settings are held fixed for data collection and recorded in `config.json`;
-they do not affect the directory name. Rerunning the same declared parameters
-and seed replaces that directory's known artifacts. Other files and older-layout
-directories are preserved. No hashes or random run IDs appear in directory names.
-Terminal output shows the circuit path once at the beginning, generation
-updates, and the results path once at the end. Generation 0 displays the measured
-original circuit `print_stats` QoR in weighted mode, before any recipe actions
-(empty recipe with the existing LUT mapping). Generation 1 is the initial
-candidate population, followed by the configured offspring generations. Pareto
-mode starts at generation 1 because it performs no baseline evaluation.
-Improvement, checkpoint and summary events are recorded in JSONL without extra
-terminal lines. JSONL retains complete metadata on every event.
-
-- `config.json`: effective configuration including seed and input/tool identities.
-- `progress.jsonl`: flushed configuration, baseline (weighted mode), improvement,
-  generation, checkpoint and summary events.
-- `result.json`: status, best/archive, counters, config, provenance and failures.
-- `best.csv`: measured scalar winner in weighted mode, or the legacy lexicographic
-  `(LUT count, LUT levels, recipe)` archive representative in Pareto mode.
-- `best.json` (weighted mode) or `pareto.json` (Pareto mode): winner or complete
-  nondominated archive, including candidates from partial generations.
-
-`completed` and `budget_exhausted` distinguish full and partial runs. Zero
-successful candidates produce no CSV and exit 1. Evaluation failures abort,
-retain diagnostics/partial Pareto archive, set legacy `best` to null and write
-no successful CSV. New `best_*` fields retain previously measured scalar
-best-so-far even on failure. Results are ignored by git. Runtimes vary; search
-and paths are reproducible. NSGA-II, its weighted-sum GA variant, and Sequential
-Forward Greedy and DRiLLS are implemented; BOiLS, AST-GWO and the other engines remain
-placeholders (exit 2, no ABC execution).
-
-## DRiLLS
-
-The [PyTorch A2C implementation](algorithms/drills/engine.py) adapts
-[SCALE Lab's original DRiLLS](https://github.com/scale-lab/DRiLLS), by Hosny,
-Hashemi, Shalan and Reda (ASP-DAC 2020), under the retained
-[BSD-3-Clause license](algorithms/drills/LICENSE). See
-[provenance and deviations](algorithms/drills/PROVENANCE.md) for the source
-comparison, corrected elementwise A2C loss semantics and finite-return convention.
-
-```bash
-# Requested default run: up to 4,000 candidate calls; not a smoke test.
-.venv/bin/python run.py --algorithm drills \
-  --circuit benchmarks/epfl/arithmetic/adder.aig --seed 0
-
-# Small CPU training run: two complete episodes, three actions each.
-.venv/bin/python run.py --algorithm drills \
-  --circuit benchmarks/epfl/arithmetic/adder.aig --seed 0 \
-  --device cpu --episodes 2 --recipe-length 3 --max-tool-calls 6
-```
-
-The root requirements file is authoritative; the algorithm requirements file
-delegates to it. `.venv/` is ignored. Keep an existing Python 3.11 environment;
-check its version before replacing any environment. Configuration files use the
-existing JSON subset of YAML. Defaults retain a 9→20→20→16 softmax actor,
-9→10→1 critic, gamma 0.99, Adam learning rates 0.01, 200 episodes and recipe
-length 20. This allows 4,000 candidate evaluations before cache hits; cache hits
-can reduce actual tool calls. The fixed baseline is counted separately.
-Each position is one shared action; ordering and repeats are preserved.
-Training performs one combined actor/critic optimizer update per complete episode.
-
-Use `--device cpu`, `--device cuda`, or `--device auto` (default; CUDA when
-available, otherwise CPU). `cuda:N` also selects a specific GPU. Explicit CUDA
-fails before ABC if unavailable. The requirements default to CPU wheels; to use
-CUDA, first install the matching PyTorch 2.7.1 CUDA wheel for your driver/runtime,
-then install root requirements (which accept that version's CUDA builds).
-For example, with a driver compatible with CUDA 11.8, use the
-[official PyTorch wheel index](https://pytorch.org/get-started/previous-versions/):
-
-```bash
-# CPU-only installation requires no CUDA libraries or GPU allocation.
-.venv/bin/python -m pip install -r requirements.txt
-# Optional CUDA build; only use when a compatible GPU and driver are available.
-.venv/bin/python -m pip install torch==2.7.1+cu118 --index-url https://download.pytorch.org/whl/cu118
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python run.py --algorithm drills --circuit benchmarks/epfl/arithmetic/adder.aig --device cuda --episodes 1 --recipe-length 3 --max-tool-calls 3
-.venv/bin/python run.py --algorithm drills --circuit benchmarks/epfl/arithmetic/adder.aig --device auto --episodes 1 --recipe-length 3 --max-tool-calls 3
-```
-
-Equivalent config fields are `"device": "cpu"`, `"device": "cuda"`, or
-`"device": "auto"`. ABC and Yosys must already be installed and on PATH;
-the runner does not install or rebuild them. GPU training may not improve total
-runtime when ABC evaluations dominate.
-
-Networks, training tensors, losses and optimizer parameter computations use the
-resolved device. CUDA action sampling stays on the GPU; CPU runs preserve NumPy
-sampling. Observation/returns preprocessing and ABC/Yosys stay on CPU. Results
-record requested/resolved devices, PyTorch version, CUDA availability/runtime and GPU model.
-Configure executables with `--abc-binary /path/to/abc` and
-`--yosys-binary /path/to/yosys`; `--timeout` applies per process.
-
-At every step, observations describe the current **pre-mapping** circuit,
-exported before LUT mapping. A separate Yosys statistics process and ABC
-statistics process extract the nine features. Mapped QoR supplies the exact reward:
-
-```python
-reward = previous_weighted_fitness - current_weighted_fitness
-```
-
-Fitness reuses Greedy's normalized weighted sum against the original circuit's
-fixed mapped QoR. The baseline is measured once, outside the candidate budget.
-Each episode resets its recipe, previous fitness and running observation
-normalizer; it does not reset the baseline, cache or budget. Best-so-far minimizes
-fitness among all valid evaluated prefixes; `best_complete` tracks full recipes.
-One uncached full-recipe replay costs one evaluation call regardless of length.
-Cache hits reuse QoR and raw observations at zero new calls. Auxiliary feature
-processes have separate counters and are excluded from that budget. Launches
-that fail or time out retain their charges. The first unaffordable cache miss
-terminates the run; partial trajectories are saved but receive no optimizer
-update or bootstrap. Valid best-so-far survives budget exhaustion.
-
-Artifacts follow the existing naming convention:
-`results/drills/<benchmark>/<circuit>/ep<episodes>_len<length>/seed_<seed>/`.
-Other settings, including device, weights, budget and learning rates, are recorded
-in configuration/provenance and do not alter the path. Reruns replace known
-artifacts in that directory; copy results elsewhere before comparing settings
-with the same declared parameters and seed. `config.json`,
-`result.json`, `best.json`, `best.csv` and `progress.jsonl` reuse the shared
-formats. Results include episode rewards, losses, completion and training counts,
-tool identities, circuit/source hashes and failure diagnostics. Checkpoints are
-progress snapshots. `Agent.save/load` separately supports model and optimizer
-files with device mapping; **experiment training resume is unsupported** because
-these files omit RNG, normalizer, environment and budget state.
-Python, NumPy and PyTorch seeds are recorded, but CPU/GPU or different tool/framework
-versions are not claimed to be bitwise reproducible.
-Use `--deterministic` (config `"deterministic": true`) to enable PyTorch
-deterministic algorithms and CUDA workspace settings where supported. Unsupported
-deterministic kernels fail explicitly. CUDA sampling uses PyTorch's RNG rather
-than the original NumPy RNG; CPU and CUDA action sequences can differ. Direct
-dependencies are pinned; transitive versions and tool binaries must also match
-for cross-machine reproduction.
-
-Validated environment: Python 3.11.15, PyTorch 2.7.1+cpu, NumPy 2.2.6,
-Yosys 0.9 and yosys-abc 1.01. Real CUDA training and cross-device checkpoint
-mapping remain untested in this CPU-only environment; unavailable-device
-failure handling is tested.
-
-Focused validation can be run sequentially with:
-
-```bash
-.venv/bin/python tests/test_drills.py -v
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q
-.venv/bin/python tests/smoke_abc.py --evaluator-only
-```
-
-The real ABC CPU test checks that both actor and critic parameters change after
-a complete episode. CUDA training is tested when available; otherwise its test
-is skipped and explicit CUDA-unavailable handling is tested. No full benchmark
-sweep or equivalence of learning curves with TensorFlow is claimed.
-
-## Sequential Forward Greedy
-
-Greedy is implemented in [engine.py](algorithms/greedy/engine.py), with one
-[config.yaml](algorithms/greedy/config.yaml) and no extra dependencies. It is an
-independent **Sequential Forward Greedy** implementation; equivalence to any
-paper's Greedy baseline has not been verified.
-
-Start with an empty recipe. At each depth, append each of the 16 shared actions
-to the selected prefix, evaluate each entire candidate from the original
-circuit through the shared ABC evaluator, and choose the lowest weighted fitness.
-Equal fitness selects the lowest action index. Actions may repeat. Continue even
-when the selected extension is worse than the preceding prefix. There is no
-randomness, restart, beam, local search or evolutionary operation; seed is
-retained for experiment identity. Fixed configuration, circuit and ABC bytes
-produce the same search decisions.
-
-Only `weighted_sum` is supported. The engine reuses NSGA-II's normalized formula:
+## 2. Layout and Status
 
 ```text
-fitness = weight_area * (lut_count / baseline_lut_count)
-        + weight_delay * (lut_levels / baseline_lut_levels)
+algorithms/                # Each engine has engine.py and config.yaml
+  greedy/                 # Sequential Forward Greedy
+  nsga2/                  # Single-objective elitist GA (weighted sum)
+  drills/                 # DRiLLS
+  boils/                  # BOiLS
+  ast_gwo/                # AST-GWO
+common/                   # ABC evaluation, actions, results, progress
+benchmarks/
+  epfl/                   # EPFL benchmark submodule
+  iscas85/                # ISPRAS benchmark submodule (Verilog sources)
+  converted/iscas85/      # Tracked converted AIG inputs
+  convert_iscas85.py      # Optional conversion and equivalence checks
+  README.md              # Benchmark details and attribution
+tests/                    # Regression and real-tool smoke checks
+results/                  # Generated, ignored experiment artifacts
+run.py                    # CLI entry point
+requirements.txt          # Python dependencies
 ```
 
-Lower is better. Weights must be finite, nonnegative and sum to 1 within 1e-9.
-The baseline reloads the original circuit with an empty recipe and the existing
-LUT mapping. Its one invocation uses a separate budget, recorded as
-`baseline_tool_calls=1` and `baseline_evaluations=1`, outside the candidate
-`max_tool_calls` limit, exactly as in the current NSGA-II engine. Total
-`abc_process_invocations` includes both baseline and candidates.
-
-Each uncached candidate costs **one tool call regardless of recipe length**.
-Ordered recipe tuples are cached within a fixed run; hits cost zero calls and
-increase only `cache_hits` and `candidate_attempts`. Failed or invalid QoR is
-never cached as a success. `evaluations` / `successful_evaluations` count only
-valid, uncached candidate measurements. `candidate_attempts` also counts a
-budget-rejected proposal. No evaluation exceeds the remaining candidate budget.
-
-Defaults: recipe length 20, seed 0, max tool calls 4000, checkpoint interval 200,
-mode `weighted_sum`, LUT K=6, weights 0.5/0.5, binary `yosys-abc`, timeout 60 seconds.
-A complete search makes 16 evaluations per depth, so the default stops after
-**320 candidate calls plus one baseline**, leaving the rest of the budget unused.
-It finishes after reaching its target length; it does not spend spare calls on
-additional search methods.
-
-The [quick-start command](#quick-start) runs a small real-ABC Adder smoke check.
-The validated two-depth run selected recipe `[15, 15]`: 374 LUTs, 10 LUT levels,
-weighted fitness `0.8342596881272194`, and status `completed`. It used 32 candidate
-calls and one baseline call; the baseline measured 254 LUTs and 51 levels.
-These are smoke measurements, not full benchmark results, and depend on the
-circuit and ABC executable recorded in the generated configuration/provenance.
-
-CLI overrides: `--config PATH` (JSON-subset YAML), `--recipe-length`, `--seed`,
-`--max-tool-calls`, `--checkpoint-interval`, `--optimization-mode weighted_sum`,
-`--lut-k`, `--weight-area`, `--weight-delay`, `--abc-binary` and `--timeout` (seconds,
-or `none` to disable). Pareto mode, unknown configuration keys, and NSGA-II-only
-search options are rejected before evaluation.
-
-Results follow the shared directory policy, for example
-`results/greedy/epfl/adder/len2/seed_0/`. Only recipe length and seed vary this
-path; other settings are recorded in the configuration. A rerun replaces the
-known artifacts in that directory and preserves unrelated files:
-
-- `config.json`: complete effective configuration, seed, circuit and ABC identities.
-- `progress.jsonl`: configuration, baseline, improvement, checkpoint, step and
-  summary events, including counters, best QoR/fitness, elapsed time and status.
-  `depth`, `target_depth`, `completed_depth` and `depth_candidates_evaluated`
-  describe search progress. Checkpoints use cumulative candidate tool calls.
-  Terminal output shows the circuit, baseline, one line per completed depth and
-  final result path; individual candidates are never logged as separate events.
-- `result.json`: configuration, provenance (including input/tool hashes),
-  counters, termination status and failures. `best` / `best_so_far` track the
-  globally best valid candidate, including shorter prefixes and alternatives
-  seen at a partial depth. `best_complete` is the best evaluated target-length
-  candidate, or null. `constructed_recipe` / `constructed_solution` preserve
-  the prefix selected after fully comparing all actions at each completed depth.
-- `best.json` and `best.csv`: the global scalar winner. No Pareto archive is
-  generated. With no valid candidate, `best.json` is null and no CSV is written.
-
-`completed` means all target depths compared all 16 actions. `budget_exhausted`
-may leave a partial depth: retain every valid candidate seen, but do not commit
-that depth's selection or pad the recipe. A target-length candidate can therefore
-exist while `constructed_recipe` is shorter and status is `budget_exhausted`.
-ABC errors or invalid metrics abort with `failed`, diagnostics and null `best`;
-previous valid measurements remain in `best_so_far`, and no successful CSV is
-written. Baseline metrics must be positive integers; candidate metrics must be
-nonnegative integers. Keyboard interruption propagates as in NSGA-II; old result
-artifacts are removed before execution and the evaluator stops its child process.
-
-Greedy makes irreversible prefix choices and evaluates only single-action
-extensions. It cannot revisit earlier decisions or explore combinations that
-initially look worse; it has no global-optimality guarantee or Pareto tradeoff
-search. This is a deterministic reference method for the shared objective.
-
-## Common convergence progress
-
-Every `checkpoint` includes these fields (also present on other engine events):
-
-| Field | Meaning |
-| --- | --- |
-| `event` | `"checkpoint"` |
-| `evaluations` | Integer count of successful, non-cached candidate recipe evaluations |
-| `tool_calls` | Cumulative launched candidate sequences, excluding the normalization baseline; integer, or null on uncertain launches |
-| `elapsed_seconds` | Cumulative wall-clock runtime in seconds |
-| `best_fitness` | Lowest measured candidate weighted fitness so far, or null |
-| `best_lut_count`, `best_lut_levels` | QoR of that same scalar winner, or null |
-
-Weighted fitness is `weight_area * LUTs / baseline_LUTs + weight_delay * levels /
-baseline_levels` (lower is better). The original circuit's empty-recipe baseline
-is a normalization reference, excluded from `evaluations` and counted separately
-as `baseline_evaluations`. Its invocation is tracked as `baseline_tool_calls`
-and excluded from candidate `tool_calls` and `max_tool_calls`, including failure
-or timeout. The baseline event therefore displays `ABC calls=0/<budget>`
-at NSGA-II generation 0 or Greedy depth 0.
-`abc_process_invocations` includes both baseline and candidate launches. The
-baseline is measured even with a zero candidate budget; baseline failure still
-aborts the run. Initial candidate population evaluations remain budgeted.
-Cache hits, failed evaluations and unevaluated proposals never increment
-`evaluations`. `candidate_attempts` includes cache hits and a budget-rejected
-candidate; `cache_hits` and process invocations are separate counters.
-`result.json` retains `successful_evaluations` as an alias of `evaluations`.
-
-`checkpoint_interval` defaults to **200 sequence calls**, configurable in JSON/YAML or
-with `--checkpoint-interval`. `common.progress.CheckpointScheduler` is reusable
-by future engines: supply a snapshot after updating measured best/archive and
-call once at termination with `final=True`. Scheduling is independent of
-generations or greedy depths. The evaluator returns only completed full recipes:
-no intermediate QoR inside a recipe is measured. At cumulative call 200 the snapshot records
-`tool_calls: 200` and `checkpoint_thresholds: [200]`. Each launched recipe
-increments calls by one, so the integrated engines cross one threshold at a time.
-The reusable scheduler can group multiple crossed thresholds into one measured
-snapshot if an adapter reports several calls together. Every threshold is
-represented once; use the actual **`tool_calls` as the convergence X-axis**,
-never generations, greedy depths or individual action counts. No interpolation
-within recipes is justified.
-
-A final checkpoint is emitted when counters or measured best/archive differ
-from the last checkpoint, including early termination and cache-only progress.
-Elapsed time, generation/depth and status changes alone do not create duplicate
-checkpoints; the final `summary` always carries termination status and runtime.
-Failed recipes yield no new QoR. Known final sequence counts can cross thresholds;
-uncertain counts remain null and cannot define additional thresholds.
-
-In Pareto mode all three scalar `best_*` fields are null. Checkpoints retain
-`pareto_size` and the full `pareto` archive; legacy `best` remains a CSV
-representative, not a scalar convergence criterion. Compare archives with an
-explicit multi-objective metric rather than treating this representative as a
-scalar optimum.
-
-Sequence-call accounting uses one invocation per sequence. The runner excludes
-the normalization baseline from the candidate budget.
-Commands, LUT mapping, fitness and search operators are unchanged. The earlier
-action-counting revision used a different budget unit; do not mix its results
-with sequence-based curves. `checkpoint_interval` is recorded in
-`config.json` and held fixed alongside the other settings outside the path label.
-
-## Validation
-
-```bash
-# Complete unit/integration suite, including both integrated engines.
-python -m unittest discover -s tests -v
-
-# Focused Greedy contracts and real-ABC CLI checks.
-python -m unittest discover -s tests -p test_greedy.py -v
-
-# Shared evaluator budget, parsing, determinism and error checks.
-python tests/smoke_abc.py --evaluator-only
-
-# Additional benchmark conversion, all-action and baseline mapping checks.
-python tests/smoke_abc.py
-```
-
-The implementation validation passed 53 unit/integration tests, including 15
-Greedy tests, and 12 focused evaluator checks. The full benchmark smoke script
-also passed c17 conversion, all 16 actions on ctrl/c17 and Adder baseline mapping.
-The suite includes small real-ABC
-CLI checks for NSGA-II's two modes on ctrl/c17 and Greedy on c17, including
-configuration overrides, output metadata and reproducible reruns. The separate
-Adder smoke run above exercises Greedy end to end without a full experiment.
-
-## Inspected integration sources
-
-Local sibling checkouts were inspected read-only. Dependencies below describe
-those sources, not installed requirements of this repository.
-
-| Planned baseline | Source and main entry points | Dependencies / integration notes |
+| Algorithm | CLI identifier | Implementation |
 | --- | --- | --- |
-| AST-GWO | [ast-gwo-aicas2026](https://github.com/ddbTran/ast-gwo-aicas2026): `scripts/run_single.sh`, `algorithms/ast_gwo/ast_gwo.py`, `utils.py`, `evaluator.py` | NumPy; pandas/matplotlib for outputs; ABC LUT mapping. Existing opcode dictionary differs from this required pool. |
-| DRiLLS | [DRiLLS](https://github.com/scale-lab/DRiLLS): `drills.py`, `drills/model.py`, `fpga_session.py`, `scl_session.py` | TensorFlow 1.12, NumPy, PyYAML, ABC/Yosys; documented Python 3.6 environment. A2C; separate FPGA and ASIC sessions. |
-| NSGA-II | [BOiLS checkout](https://github.com/SZU-AdvTech-2023/050-BOiLS-Bayesian-Optimisation-for-Logic-Synthesis): `GA/main_nsga2.py`, `GA/nsga2_exp.py` | pymoo 0.5.0, NumPy, pandas, joblib; this fork evaluates through iMAP. The integrated engine independently implements the supplied example's discrete uniform-crossover/random-reset variant with shared ABC evaluation; see provenance above. |
-| ERL-LS | [ERL-LS](https://github.com/Intelligent-Computing-Research-Group/ERL-LS): `ERL-abcRL/testReinforce_aig.py`, `reinforce_aig.py`, `env_aig.py` | PyTorch, DGL, NumPy, Numba, `abc_py`/`mtlPy`. Imports reference absent helper modules (`perf_analysis`, `env_forLargeFile`, `convert_list2actions`, `env`); restoration and variant selection needed. `ERL-DRiLLS` has no implementation in this checkout. |
-| BOiLS | [BOiLS checkout](https://github.com/SZU-AdvTech-2023/050-BOiLS-Bayesian-Optimisation-for-Logic-Synthesis): `Boils/main_boils.py`, `boils_exp.py`, `optimizer.py`, `sessions/utils_eval.py` | PyTorch, GPyTorch, sentence-transformers, NumPy, pandas, joblib; Python 3.7 documented; iMAP backend here. Budget undecided. |
-| FlowTune | [FlowTune](https://github.com/Yu-Maryland/FlowTune): `FlowTune-AIG-Optimization/single_design.sh`, `src/src/base/abci/abc.c` (`ftune`) | Custom ABC C/C++ command, readline, OpenMP, build tools; optional Yosys/VTR flows. Internal actions need observable accounting. |
-| CB-EVO | [CB-EVO](https://github.com/sallyliu921/CB-EVO): `src/main.cpp`, `bandit.hpp`, `evolution.hpp` | C++17, CMake, OpenMP, Eigen, ABC; optional Yosys/ccirc feature extraction. Native implementation, not a Python engine. |
-| RL4LS | [RL4LS](https://github.com/Gabriel-in-Toronto/RL4LS): `RL/PPO.py`, `RL/Env.py`, `RL/Feature_extractor.py` | Stable Baselines3, PyTorch, Gym, NumPy, PyYAML, icecream, ABC, modified ccirc. `PPO.py` constructs A2C despite importing PPO; resolve source inconsistency. Modified ccirc requires obtaining the authors' implementation. |
-| Greedy | [DRiLLS greedy](https://github.com/scale-lab/DRiLLS/tree/master/baseline/greedy): `baseline/greedy/greedy.py` | Historical source reference only. The integrated Sequential Forward Greedy is independent and does not claim equivalence to this baseline. |
+| Greedy | `greedy` | `algorithms/greedy/` |
+| GA (weighted sum) | `nsga2` | `algorithms/nsga2/` |
+| DRiLLS | `drills` | `algorithms/drills/` |
+| BOiLS | `boils` | `algorithms/boils/` |
+| AST-GWO | `ast_gwo` | `algorithms/ast_gwo/` |
 
-The supplied `../example/drill_logic_synthesis.py` also uses the exact shared pool
-and ABC LUT parsing, but explicitly substitutes linear-policy REINFORCE for
-DRiLLS's A2C. It is a useful utility reference, not an equivalent original DRiLLS
-implementation. Neither example source is copied or executed. The NSGA-II adaptation adds the
-shared sequence-invocation budget missing from the example.
+The default `algorithms/nsga2/` runner is a single-objective elitist GA with
+weighted-sum fitness, not canonical multi-objective NSGA-II. Its explicit Pareto
+mode remains available; these examples use the scalar GA.
 
-Before integrating another engine, select its faithful source/variant, QoR
-track and objective (including Pareto reporting), LUT K or ASIC library/constraints,
-circuit suite, recipe lengths, seeds, per-algorithm hyperparameters, and policies
-for training, cache hits and failures. Preserve core algorithms and document the
-required shared-pool/evaluator adaptation. Confirm source licenses before copying.
+## 3. Running Algorithms
 
-## AST-GWO
-
-AST-GWO is integrated as a binary Grey Wolf Optimizer with the original adaptive
-sigmoid transfer, historical alpha/beta/delta leaders and four-bit action codec.
-It uses the shared original-circuit baseline, normalized weighted objective,
-ordered 16-action pool and global recipe-evaluation budget. NumPy is its only
-non-standard-library dependency (already installed for the other engines).
+Run from the repository root with the virtual environment activated. These small
+examples use the same ISCAS85 circuit and seed; they check execution rather than
+provide comparable full-experiment budgets.
 
 ```bash
-.venv/bin/python run.py --algorithm ast_gwo \
-  --circuit benchmarks/epfl/arithmetic/adder.aig \
-  --recipe-length 20 --population-size 50 --generations 200 \
-  --max-tool-calls 4000 --seed 0 --k-min 6 --k-max 14
-
-.venv/bin/python -m unittest discover -s tests -p test_ast_gwo.py -v
+# Greedy
+python run.py --algorithm greedy --circuit benchmarks/converted/iscas85/c17.aig \
+  --seed 0 --recipe-length 2 --max-tool-calls 32
+# GA (single-objective weighted sum)
+python run.py --algorithm nsga2 --circuit benchmarks/converted/iscas85/c17.aig \
+  --seed 0 --recipe-length 2 --population-size 4 --offspring-count 4 \
+  --generations 1 --max-tool-calls 8 --optimization-mode weighted_sum
+# DRiLLS (CPU)
+python run.py --algorithm drills --circuit benchmarks/converted/iscas85/c17.aig \
+  --seed 0 --recipe-length 2 --episodes 2 --max-tool-calls 4 --device cpu --deterministic
+# BOiLS
+python run.py --algorithm boils --circuit benchmarks/converted/iscas85/c17.aig \
+  --seed 0 --recipe-length 2 --max-tool-calls 4
+# AST-GWO
+python run.py --algorithm ast_gwo --circuit benchmarks/converted/iscas85/c17.aig \
+  --seed 0 --recipe-length 2 --population-size 3 --generations 1 --max-tool-calls 6
 ```
 
-Defaults are in `algorithms/ast_gwo/config.yaml`. `--config` and CLI overrides
-follow the existing engine conventions. Results go to
-`results/ast_gwo/epfl/adder/pop50_gen200_len20/seed_0/`, including progress JSONL,
-config/result/best JSON and best CSV. Reruns replace the same known artifacts.
-Initial population is generation zero; `completed_iterations` counts completed
-moves and `population_evaluated` describes the current, possibly partial,
-population. Budget exhaustion preserves the best valid evaluated recipe.
-Failures retain previous measurements in `best_so_far`, following the other
-engines' failure policy. Finite runs can complete without spending the full
-budget because cache hits cost zero.
+Replace `--circuit` with an EPFL `.aig` path to use that suite. Each algorithm
+loads `algorithms/<identifier>/config.yaml` by default. Use `--config path/to/config.yaml`
+for an alternative JSON-syntax configuration (a YAML subset); CLI options override
+its values. See `python run.py --help` for supported options. For comparisons,
+match circuits, seeds, recipe lengths, LUT K, objective weights, and candidate
+budgets explicitly; BOiLS defaults to 200 calls, the other engines to 4000.
 
-See [AST-GWO provenance](algorithms/ast_gwo/PROVENANCE.md) for exact equations,
-coefficient timing, upstream-source comparisons, required adaptations and
-limitations. This baseline preserves search mechanisms; it does not reproduce
-the original paper's numerical results.
+One complete recipe evaluation costs one ABC call regardless of length. Cache
+hits cost zero. The original-circuit normalization baseline is counted separately
+and excluded from the candidate budget. Budget exhaustion preserves best-so-far
+measurements; an evaluation failure aborts the run with diagnostics.
+
+Outputs default to `results/<algorithm>/<suite>/<circuit>/<parameters>/seed_<seed>/`.
+Runs write `config.json`, `result.json`, `best.json`, `best.csv` when a valid
+successful result exists, and `progress.jsonl`. For example, Greedy above writes
+`results/greedy/iscas85/c17/len2/seed_0/`. Rerunning the same parameter path and seed
+replaces its known artifacts; archive results before changing other settings.
+
+See source attribution and adaptations in the [GA](algorithms/nsga2/PROVENANCE.md),
+[DRiLLS](algorithms/drills/PROVENANCE.md), [BOiLS](algorithms/boils/README.md),
+and [AST-GWO](algorithms/ast_gwo/PROVENANCE.md) documentation.

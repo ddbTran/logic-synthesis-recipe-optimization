@@ -282,7 +282,7 @@ class NSGA2Tests(unittest.TestCase):
                 self.assertFalse((result_path.parent / "best.csv").exists())
 
     def test_other_engines_remain_placeholders(self):
-        result = subprocess.run([sys.executable, "run.py", "--algorithm", "flowtune", "--circuit", "missing.aig"],
+        result = subprocess.run([sys.executable, "run.py", "--algorithm", "cb_evo", "--circuit", "missing.aig"],
                                 capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 2)
         self.assertIn("not implemented", result.stderr)

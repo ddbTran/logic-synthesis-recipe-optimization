@@ -173,9 +173,9 @@ allows 40 + 40 * 99 = 4000 evaluation attempts; cache hits launch no ABC and do
 not consume calls. The runner streams generation updates to the terminal; `progress.jsonl`
 retains configuration, baseline, best improvements, generations, checkpoints
 and final status. Checkpoints use the shared scheduler and default interval of
-200 launched sequence calls. See the [common progress schema](../../README.md#common-convergence-progress)
-for exact counting, recipe granularity, threshold grouping, final deduplication
-and Pareto semantics. The new `evaluations` field aliases candidate-only
+200 launched sequence calls. The [shared progress implementation](../../common/progress.py)
+defines threshold grouping and final deduplication; counting and Pareto semantics
+are described above. The `evaluations` field aliases candidate-only
 `successful_evaluations`; cache hits and failures are excluded. Scalar checkpoint
 fields are null in Pareto mode; its archive and legacy representative remain.
 
